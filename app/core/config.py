@@ -13,3 +13,6 @@ COLLECTION_NAME = "kookmin_rules"
 
 # FAISS 임계값 세팅 (튜닝용)
 CACHE_THRESHOLD = 0.35
+
+# 멀티턴 대화 설정
+MAX_TURNS_BEFORE_SUMMARY = 5  # 이 턴 수 이상이면 대화 요약 실행
