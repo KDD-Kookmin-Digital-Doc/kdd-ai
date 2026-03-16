@@ -1,29 +1,75 @@
-from langchain_community.vectorstores import FAISS
-from langchain_core.documents import Document
-from app.services.vector_db import embeddings
+"""
+Supabase PGVector 기반 시맨틱 캐시
+- question_logs 테이블에서 유사 질문 검색
+- 질문-답변 쌍을 벡터와 함께 저장
+"""
+from sqlalchemy import text
+from app.services.vector_db import embeddings, engine, _db_available
 from app.core.config import CACHE_THRESHOLD
-#질문이 들어오면 가장 먼저 살펴보는 FAISS 시맨틱 캐시
-# 초기화 (메모리 DB)
-dummy_faq = [Document(page_content="초기화용 더미 데이터", metadata={"answer": "더미"})]
-semantic_cache = FAISS.from_documents(dummy_faq, embeddings)
+
 
 def check_cache(user_msg: str):
-    """캐시에 비슷한 질문이 있는지 확인"""
-    # 정규화: 띄어쓰기, 물음표 제거
+    """question_logs에서 유사한 질문이 있는지 확인"""
+    if not _db_available:
+        return None
+
     normalized_msg = user_msg.replace(" ", "").replace("?", "").strip()
-    
-    results = semantic_cache.similarity_search_with_score(normalized_msg, k=1)
-    if results:
-        best_match, score = results[0]
-        print(f"[CACHE CHECK] 입력: '{user_msg}' | 거리: {score:.4f}")
-        
-        if score < CACHE_THRESHOLD and best_match.page_content != "초기화용 더미 데이터":
-            return best_match.metadata["answer"]
+
+    try:
+        query_embedding = embeddings.embed_query(normalized_msg)
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("""
+                    SELECT answer, embedding <=> :embedding AS distance
+                    FROM question_logs
+                    WHERE embedding IS NOT NULL AND answer IS NOT NULL
+                    ORDER BY embedding <=> :embedding
+                    LIMIT 1
+                """),
+                {"embedding": embedding_str}
+            )
+            row = result.fetchone()
+
+        if row and row[1] < CACHE_THRESHOLD:
+            print(f"[CACHE HIT] 입력: '{user_msg}' | 거리: {row[1]:.4f}")
+            return row[0]
+        elif row:
+            print(f"[CACHE MISS] 입력: '{user_msg}' | 거리: {row[1]:.4f}")
+
+    except Exception as e:
+        print(f"[CACHE ERROR] 캐시 조회 실패: {e}")
+
     return None
 
+
 def update_cache(user_msg: str, answer: str):
-    """새로운 질의응답을 캐시에 학습시킵니다."""
+    """질문-답변 쌍을 question_logs에 저장"""
+    if not _db_available:
+        return
+
     normalized_msg = user_msg.replace(" ", "").replace("?", "").strip()
-    new_doc = Document(page_content=normalized_msg, metadata={"answer": answer})
-    semantic_cache.add_documents([new_doc])
-    print("[CACHE UPDATE] 새로운 답변이 캐시에 저장되었습니다.")
+
+    try:
+        query_embedding = embeddings.embed_query(normalized_msg)
+        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+
+        with engine.connect() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO question_logs (question, embedding, answer, intent)
+                    VALUES (:question, :embedding, :answer, :intent)
+                """),
+                {
+                    "question": user_msg,
+                    "embedding": embedding_str,
+                    "answer": answer,
+                    "intent": "학사규정",
+                }
+            )
+            conn.commit()
+        print("[CACHE UPDATE] 질문-답변이 DB에 저장되었습니다.")
+
+    except Exception as e:
+        print(f"[CACHE ERROR] 캐시 저장 실패: {e}")

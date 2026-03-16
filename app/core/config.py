@@ -1,17 +1,31 @@
 import os
-#API 키나 DB 주소 같은 '환경 변수'들을 한 곳에서 관리하는 파일
-# 나중에는 .env 파일과 python-dotenv 라이브러리를 써서 숨길 예정
-# 현재는 프로토타입 구동을 위해 명시적으로 세팅
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 load_dotenv()
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
 
-PG_CONNECTION_STRING = os.getenv("PG_CONNECTION_STRING", "postgresql+psycopg2://user:password@localhost:5432/rag_db")
-COLLECTION_NAME = "kookmin_rules"
+# DB 연결 설정 - PG_CONNECTION_STRING에서 파싱하거나 개별 변수 사용
+_pg_url = os.getenv("PG_CONNECTION_STRING", "")
+if _pg_url:
+    # postgresql+psycopg2://user:pass@host:port/db 형태에서 파싱
+    _parsed = urlparse(_pg_url.replace("postgresql+psycopg2://", "postgresql://"))
+    PG_USER = _parsed.username or ""
+    PG_PASSWORD = _parsed.password or ""
+    PG_HOST = _parsed.hostname or ""
+    PG_PORT = _parsed.port or 5432
+    PG_DATABASE = _parsed.path.lstrip("/") or "postgres"
+else:
+    PG_HOST = os.getenv("PG_HOST", "localhost")
+    PG_PORT = int(os.getenv("PG_PORT", "5432"))
+    PG_USER = os.getenv("PG_USER", "postgres")
+    PG_PASSWORD = os.getenv("PG_PASSWORD", "")
+    PG_DATABASE = os.getenv("PG_DATABASE", "postgres")
+COLLECTION_NAME = "documents"
+CACHE_COLLECTION_NAME = "question_logs"
 
-# FAISS 임계값 세팅 (튜닝용)
+# 시맨틱 캐시 임계값 (코사인 거리 기준, 낮을수록 엄격)
 CACHE_THRESHOLD = 0.35
 
 # 멀티턴 대화 설정

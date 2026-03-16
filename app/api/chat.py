@@ -54,6 +54,8 @@ async def chat_endpoint(req: ChatRequest):
     # 3. Vector DB 검색
     print("[ROUTER] 규정 검색 진행 중...")
     context_text = search_documents(user_msg)
+    if not context_text:
+        context_text = "관련 규정을 찾을 수 없습니다."
 
     # 4. 멀티턴 vs 싱글턴 분기
     if session_id:
