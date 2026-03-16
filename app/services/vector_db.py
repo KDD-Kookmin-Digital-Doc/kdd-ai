@@ -4,13 +4,14 @@ Supabase PGVector 기반 문서 검색 모듈
 - 커스텀 스키마에 맞춰 직접 쿼리
 """
 from sqlalchemy import create_engine, text, URL
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from app.core.config import PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
 
-print("[INIT] 로컬 임베딩 모델 로딩 중...")
-embeddings = HuggingFaceEmbeddings(
-    model_name="jhgan/ko-sroberta-multitask",
-    encode_kwargs={'normalize_embeddings': True}
+print("[INIT] Google Gemini Embedding 모델 로딩 중...")
+embeddings = GoogleGenerativeAIEmbeddings(
+    model="models/gemini-embedding-exp-03-07",
+    task_type="SEMANTIC_SIMILARITY",
+    output_dimensionality=768,
 )
 
 # DB 엔진 생성 (URL.create로 유저명의 . 파싱 문제 방지)
