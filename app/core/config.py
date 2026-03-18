@@ -20,7 +20,7 @@ if _pg_url:
     PG_HOST = _parsed.hostname or "localhost"
     PG_PORT = _parsed.port or 5432
     PG_DATABASE = _parsed.path.lstrip("/") or "postgres"
-    if not PG_HOST or PG_HOST == "localhost":
+    if _parsed.hostname is None:
         raise ValueError(
             "PG_CONNECTION_STRING에서 호스트를 파싱할 수 없습니다. "
             "형식: postgresql+psycopg2://user:pass@host:port/db"

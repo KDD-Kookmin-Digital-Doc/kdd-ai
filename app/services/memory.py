@@ -7,6 +7,7 @@
 - 세션 만료(TTL) 및 최대 세션 수 제한
 """
 import asyncio
+import hashlib
 import time
 from collections import OrderedDict
 from langchain_core.chat_history import InMemoryChatMessageHistory
@@ -39,15 +40,18 @@ _summary_prompt = ChatPromptTemplate.from_messages([
 _summary_chain = _summary_prompt | _summary_llm
 
 
+def _hash_session(session_id: str) -> str:
+    """세션 ID의 SHA-256 해시 앞 12자리를 반환 (로깅용)"""
+    return hashlib.sha256(session_id.encode()).hexdigest()[:12]
+
+
 def _cleanup_expired():
     """만료된 세션을 제거하고, 최대 세션 수를 초과하면 가장 오래된 세션을 제거"""
     now = time.time()
-    # 만료된 세션 제거
     expired = [sid for sid, (_, ts) in _session_store.items() if now - ts > SESSION_TTL]
     for sid in expired:
         _session_store.pop(sid, None)
         _summary_store.pop(sid, None)
-    # 최대 세션 수 초과 시 가장 오래된 세션 제거
     while len(_session_store) > MAX_SESSIONS:
         oldest_sid, _ = _session_store.popitem(last=False)
         _summary_store.pop(oldest_sid, None)
@@ -68,10 +72,14 @@ def get_session_history(session_id: str) -> InMemoryChatMessageHistory:
 
 
 def get_session_summary(session_id: str) -> str:
-    """세션의 요약본을 반환합니다."""
+    """세션의 요약본을 반환합니다. 만료된 요약은 삭제 후 빈 문자열 반환."""
     entry = _summary_store.get(session_id)
     if entry:
-        return entry[0]
+        summary_text, ts = entry
+        if time.time() - ts > SESSION_TTL:
+            _summary_store.pop(session_id, None)
+            return ""
+        return summary_text
     return ""
 
 
@@ -128,10 +136,12 @@ async def summarize_and_compress(session_id: str):
     if existing_summary:
         conversation_text = f"[이전 대화 요약]\n{existing_summary}\n\n[최근 대화]\n{conversation_text}"
 
-    print(f"[MEMORY] 세션 {session_id}: 대화 요약 중... (턴 수: {_get_turn_count(session_id)})")
+    sid_hash = _hash_session(session_id)
+    turn_count = _get_turn_count(session_id)
+    print(f"[MEMORY] session={sid_hash}: 대화 요약 중... (턴 수: {turn_count})")
     result = await asyncio.to_thread(_summary_chain.invoke, {"conversation": conversation_text})
     _summary_store[session_id] = (result.content, time.time())
-    print(f"[MEMORY] 요약 완료: {result.content[:80]}...")
+    print(f"[MEMORY] session={sid_hash}: 요약 완료")
 
     # 최근 2턴(4개 메시지)만 남기고 히스토리 압축
     keep_count = 4
@@ -143,7 +153,7 @@ async def summarize_and_compress(session_id: str):
 
 def build_chat_context(session_id: str) -> str:
     """
-    LLM에 전달할 대화 컨텍스트를 구성합니다.
+    LLM에 전달할 대화 컨텍스트를 구성합니다. (문자열 버전, 하위 호환)
     - 요약이 있으면 요약 + 최근 대화
     - 없으면 전체 대화 히스토리
     """
@@ -159,3 +169,22 @@ def build_chat_context(session_id: str) -> str:
         parts.append(f"[최근 대화]\n{recent}")
 
     return "\n\n".join(parts)
+
+
+def build_chat_messages(session_id: str) -> list:
+    """
+    LLM에 전달할 대화 컨텍스트를 메시지 객체 리스트로 구성합니다.
+    - 요약이 있으면 SystemMessage로 요약 추가 + 최근 메시지
+    - 없으면 전체 대화 히스토리 메시지
+    """
+    from langchain_core.messages import SystemMessage
+
+    summary = get_session_summary(session_id)
+    history = get_session_history(session_id)
+
+    messages = []
+    if summary:
+        messages.append(SystemMessage(content=f"[이전 대화 요약]\n{summary}"))
+
+    messages.extend(history.messages)
+    return messages

@@ -1,4 +1,5 @@
 import asyncio
+from typing import Dict
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from app.schemas.request import ChatRequest
@@ -8,13 +9,29 @@ from app.services.llm import rag_chain, multiturn_rag_chain
 from app.services.memory import (
     add_user_message, add_ai_message,
     should_summarize, summarize_and_compress,
-    build_chat_context,
+    build_chat_messages,
 )
 
 router = APIRouter()
 
-# 인사말 키워드 (길이 제한 완화)
+# 인사말 키워드
 _GREETINGS = ["안녕하세요", "안녕", "반가워", "반갑습니다", "누구야", "고마워", "하이", "헬로"]
+
+# 세션별 동시성 제어 락
+_session_locks: Dict[str, asyncio.Lock] = {}
+
+
+def _get_session_lock(session_id: str) -> asyncio.Lock:
+    """세션별 asyncio.Lock을 반환 (없으면 생성)"""
+    if session_id not in _session_locks:
+        _session_locks[session_id] = asyncio.Lock()
+    return _session_locks[session_id]
+
+
+def _format_sse(payload: str) -> str:
+    """멀티라인 페이로드를 올바른 SSE 프레이밍으로 변환"""
+    lines = payload.split("\n")
+    return "".join(f"data: {line}\n" for line in lines) + "\n"
 
 
 @router.post(
@@ -39,11 +56,11 @@ async def chat_endpoint(req: ChatRequest):
 
     # 1. 시맨틱 캐시 확인 (싱글턴 대화에서만 적용)
     if not session_id:
-        cached_answer = check_cache(user_msg)
+        cached_answer = await asyncio.to_thread(check_cache, user_msg)
         if cached_answer:
             async def cache_streamer():
-                yield "data: [캐시된 답변입니다 ⚡]\n\n"
-                yield f"data: {cached_answer}\n\n"
+                yield _format_sse("[캐시된 답변입니다 ⚡]")
+                yield _format_sse(cached_answer)
                 yield "data: [DONE]\n\n"
             return StreamingResponse(cache_streamer(), media_type="text/event-stream")
 
@@ -74,20 +91,22 @@ async def _handle_single(user_msg: str, context_text: str):
         async for chunk in rag_chain.astream({"context": context_text, "question": user_msg}):
             text_chunk = chunk.content
             full_answer += text_chunk
-            yield f"data: {text_chunk}\n\n"
+            yield _format_sse(text_chunk)
         await asyncio.to_thread(update_cache, user_msg, full_answer)
         yield "data: [DONE]\n\n"
     return StreamingResponse(streamer(), media_type="text/event-stream")
 
 
 async def _handle_multiturn(session_id: str, user_msg: str, context_text: str):
-    """멀티턴 대화: 히스토리 관리 + 요약 압축 (비동기)"""
-    add_user_message(session_id, user_msg)
+    """멀티턴 대화: 히스토리 관리 + 요약 압축 (비동기, 세션 락)"""
+    lock = _get_session_lock(session_id)
 
-    if should_summarize(session_id):
-        await summarize_and_compress(session_id)
-
-    chat_history = build_chat_context(session_id)
+    # 히스토리 업데이트 및 컨텍스트 스냅샷을 락 안에서 수행
+    async with lock:
+        add_user_message(session_id, user_msg)
+        if should_summarize(session_id):
+            await summarize_and_compress(session_id)
+        chat_history = build_chat_messages(session_id)
 
     async def streamer():
         full_answer = ""
@@ -98,9 +117,11 @@ async def _handle_multiturn(session_id: str, user_msg: str, context_text: str):
         }):
             text_chunk = chunk.content
             full_answer += text_chunk
-            yield f"data: {text_chunk}\n\n"
+            yield _format_sse(text_chunk)
 
-        add_ai_message(session_id, full_answer)
+        # AI 응답 저장도 락 안에서
+        async with lock:
+            add_ai_message(session_id, full_answer)
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(streamer(), media_type="text/event-stream")
