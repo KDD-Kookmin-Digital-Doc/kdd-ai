@@ -27,7 +27,7 @@ _session_store: OrderedDict[str, tuple[InMemoryChatMessageHistory, float]] = Ord
 _summary_store: OrderedDict[str, tuple[str, float]] = OrderedDict()
 
 # 요약용 LLM (가벼운 모델 사용)
-_summary_llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0)
+_summary_llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
 
 _summary_prompt = ChatPromptTemplate.from_messages([
     ("system",

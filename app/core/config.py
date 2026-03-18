@@ -15,16 +15,16 @@ os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
 _pg_url = os.getenv("PG_CONNECTION_STRING", "")
 if _pg_url:
     _parsed = urlparse(_pg_url.replace("postgresql+psycopg2://", "postgresql://"))
-    PG_USER = _parsed.username or ""
-    PG_PASSWORD = _parsed.password or ""
-    PG_HOST = _parsed.hostname or "localhost"
-    PG_PORT = _parsed.port or 5432
-    PG_DATABASE = _parsed.path.lstrip("/") or "postgres"
     if _parsed.hostname is None:
         raise ValueError(
             "PG_CONNECTION_STRING에서 호스트를 파싱할 수 없습니다. "
             "형식: postgresql+psycopg2://user:pass@host:port/db"
         )
+    PG_USER = _parsed.username or ""
+    PG_PASSWORD = _parsed.password or ""
+    PG_HOST = _parsed.hostname or "localhost"
+    PG_PORT = _parsed.port or 5432
+    PG_DATABASE = _parsed.path.lstrip("/") or "postgres"
 else:
     PG_HOST = os.getenv("PG_HOST", "localhost")
     PG_PORT = int(os.getenv("PG_PORT", "5432"))

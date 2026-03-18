@@ -1,5 +1,7 @@
 import asyncio
-from typing import Dict
+import time
+from collections import OrderedDict
+from typing import Tuple
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from app.schemas.request import ChatRequest
@@ -10,6 +12,7 @@ from app.services.memory import (
     add_user_message, add_ai_message,
     should_summarize, summarize_and_compress,
     build_chat_messages,
+    SESSION_TTL, MAX_SESSIONS,
 )
 
 router = APIRouter()
@@ -17,15 +20,29 @@ router = APIRouter()
 # 인사말 키워드
 _GREETINGS = ["안녕하세요", "안녕", "반가워", "반갑습니다", "누구야", "고마워", "하이", "헬로"]
 
-# 세션별 동시성 제어 락
-_session_locks: Dict[str, asyncio.Lock] = {}
+# 세션별 동시성 제어 락 (TTL 기반, 메모리 누수 방지)
+_session_locks: OrderedDict[str, Tuple[asyncio.Lock, float]] = OrderedDict()
 
 
 def _get_session_lock(session_id: str) -> asyncio.Lock:
-    """세션별 asyncio.Lock을 반환 (없으면 생성)"""
-    if session_id not in _session_locks:
-        _session_locks[session_id] = asyncio.Lock()
-    return _session_locks[session_id]
+    """세션별 asyncio.Lock을 반환 (없으면 생성). 만료된 락은 자동 정리."""
+    now = time.time()
+    # 만료된 락 정리
+    expired = [sid for sid, (_, ts) in _session_locks.items() if now - ts > SESSION_TTL]
+    for sid in expired:
+        _session_locks.pop(sid, None)
+    # 최대 크기 초과 시 가장 오래된 항목 제거
+    while len(_session_locks) > MAX_SESSIONS:
+        _session_locks.popitem(last=False)
+    # 락 반환 또는 생성
+    if session_id in _session_locks:
+        lock, _ = _session_locks[session_id]
+        _session_locks[session_id] = (lock, now)
+        _session_locks.move_to_end(session_id)
+        return lock
+    lock = asyncio.Lock()
+    _session_locks[session_id] = (lock, now)
+    return lock
 
 
 def _format_sse(payload: str) -> str:
