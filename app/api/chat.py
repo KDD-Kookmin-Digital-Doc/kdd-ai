@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from app.schemas.request import ChatRequest
@@ -11,6 +12,9 @@ from app.services.memory import (
 )
 
 router = APIRouter()
+
+# 인사말 키워드 (길이 제한 완화)
+_GREETINGS = ["안녕하세요", "안녕", "반가워", "반갑습니다", "누구야", "고마워", "하이", "헬로"]
 
 
 @router.post(
@@ -43,17 +47,16 @@ async def chat_endpoint(req: ChatRequest):
                 yield "data: [DONE]\n\n"
             return StreamingResponse(cache_streamer(), media_type="text/event-stream")
 
-    # 2. 경량 라우터 (짧은 인사말은 LLM 호출 생략)
-    greetings = ["안녕", "반가워", "누구야", "고마워", "하이"]
-    if len(user_msg) < 4 and any(g in user_msg for g in greetings):
+    # 2. 경량 라우터 (인사말은 LLM 호출 생략)
+    normalized = user_msg.replace(" ", "").lower()
+    if any(g in normalized for g in _GREETINGS) and len(user_msg) < 15:
         async def greeting_streamer():
             yield "data: 안녕하세요! 국민대학교 학사규정 챗봇입니다. 무엇을 도와드릴까요?\n\n"
             yield "data: [DONE]\n\n"
         return StreamingResponse(greeting_streamer(), media_type="text/event-stream")
 
     # 3. Vector DB 검색
-    print("[ROUTER] 규정 검색 진행 중...")
-    context_text = search_documents(user_msg)
+    context_text = await asyncio.to_thread(search_documents, user_msg)
     if not context_text:
         context_text = "관련 규정을 찾을 수 없습니다."
 
@@ -65,33 +68,30 @@ async def chat_endpoint(req: ChatRequest):
 
 
 async def _handle_single(user_msg: str, context_text: str):
-    """싱글턴 대화: 기존 방식 그대로"""
+    """싱글턴 대화: 비동기 스트리밍"""
     async def streamer():
         full_answer = ""
-        for chunk in rag_chain.stream({"context": context_text, "question": user_msg}):
+        async for chunk in rag_chain.astream({"context": context_text, "question": user_msg}):
             text_chunk = chunk.content
             full_answer += text_chunk
             yield f"data: {text_chunk}\n\n"
-        update_cache(user_msg, full_answer)
+        await asyncio.to_thread(update_cache, user_msg, full_answer)
         yield "data: [DONE]\n\n"
     return StreamingResponse(streamer(), media_type="text/event-stream")
 
 
 async def _handle_multiturn(session_id: str, user_msg: str, context_text: str):
-    """멀티턴 대화: 히스토리 관리 + 요약 압축"""
-    # 히스토리에 사용자 메시지 추가
+    """멀티턴 대화: 히스토리 관리 + 요약 압축 (비동기)"""
     add_user_message(session_id, user_msg)
 
-    # 요약이 필요하면 실행
     if should_summarize(session_id):
-        summarize_and_compress(session_id)
+        await summarize_and_compress(session_id)
 
-    # 대화 컨텍스트 구성
     chat_history = build_chat_context(session_id)
 
     async def streamer():
         full_answer = ""
-        for chunk in multiturn_rag_chain.stream({
+        async for chunk in multiturn_rag_chain.astream({
             "context": context_text,
             "chat_history": chat_history,
             "question": user_msg,
@@ -100,7 +100,6 @@ async def _handle_multiturn(session_id: str, user_msg: str, context_text: str):
             full_answer += text_chunk
             yield f"data: {text_chunk}\n\n"
 
-        # AI 응답을 히스토리에 저장
         add_ai_message(session_id, full_answer)
         yield "data: [DONE]\n\n"
 

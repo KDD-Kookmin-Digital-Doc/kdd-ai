@@ -9,7 +9,7 @@ from app.core.config import PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
 
 print("[INIT] Google Gemini Embedding 모델 로딩 중...")
 embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/gemini-embedding-exp-03-07",
+    model="models/gemini-embedding-001",
     task_type="SEMANTIC_SIMILARITY",
     output_dimensionality=768,
 )
@@ -24,7 +24,11 @@ try:
         port=PG_PORT,
         database=PG_DATABASE,
     )
-    engine = create_engine(url)
+    engine = create_engine(
+        url,
+        connect_args={"connect_timeout": 10},
+        pool_pre_ping=True,
+    )
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
     print("[INIT] Supabase PostgreSQL 연결 성공!")
@@ -42,9 +46,15 @@ def search_documents(query: str, k: int = 3, threshold: float = 1.2) -> str:
 
     try:
         query_embedding = embeddings.embed_query(query)
+    except Exception:
+        print("[DB ERROR] 임베딩 생성 실패")
+        return ""
+
+    try:
         embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
         with engine.connect() as conn:
+            conn.execute(text("SET statement_timeout = '10s'"))
             result = conn.execute(
                 text("""
                     SELECT content, embedding <=> :embedding AS distance
@@ -58,11 +68,7 @@ def search_documents(query: str, k: int = 3, threshold: float = 1.2) -> str:
             rows = result.fetchall()
 
         filtered = [row[0] for row in rows if row[1] <= threshold]
-
-        if filtered:
-            return "\n\n".join(filtered)
-        else:
-            return ""
-    except Exception as e:
-        print(f"[DB ERROR] 문서 검색 실패: {e}")
+        return "\n\n".join(filtered) if filtered else ""
+    except Exception:
+        print("[DB ERROR] 문서 검색 실패")
         return ""

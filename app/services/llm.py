@@ -1,6 +1,5 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
-from app.core.config import GOOGLE_API_KEY
 
 # Gemini 2.5 Flash 모델
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
