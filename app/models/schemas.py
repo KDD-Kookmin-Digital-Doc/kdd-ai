@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ── Chat 관련 ──
@@ -58,6 +58,15 @@ class FAQAnalyzeRequest(BaseModel):
     """POST /api/faq/analyze 요청 모델."""
 
     questions: list[str] = Field(..., min_length=1)
+
+    @field_validator("questions")
+    @classmethod
+    def validate_questions_not_blank(cls, v: list[str]) -> list[str]:
+        """각 질문이 빈 문자열이나 공백만 있는 문자열이 아닌지 검증."""
+        for i, q in enumerate(v):
+            if not q.strip():
+                raise ValueError(f"questions[{i}]이(가) 비어있거나 공백만 포함합니다.")
+        return v
     top_k: int = Field(default=5, ge=1, le=50)
     min_cluster_size: int = Field(default=2, ge=2)
 

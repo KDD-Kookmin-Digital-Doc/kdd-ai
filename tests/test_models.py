@@ -33,7 +33,7 @@ class TestSettings:
     def test_defaults(self, monkeypatch):
         monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
         monkeypatch.setenv("SUPABASE_KEY", "test-key")
-        s = Settings()
+        s = Settings(_env_file=None)
         assert s.BEDROCK_LLM_MODEL_ID == "anthropic.claude-3-haiku-20240307-v1:0"
         assert s.BEDROCK_EMBEDDING_MODEL_ID == "cohere.embed-multilingual-v3"
         assert s.EMBEDDING_DIMENSION == 1024
@@ -50,14 +50,14 @@ class TestSettings:
         monkeypatch.delenv("SUPABASE_URL", raising=False)
         monkeypatch.delenv("SUPABASE_KEY", raising=False)
         with pytest.raises(ValidationError):
-            Settings()
+            Settings(_env_file=None)
 
     def test_custom_values(self, monkeypatch):
         monkeypatch.setenv("SUPABASE_URL", "https://custom.supabase.co")
         monkeypatch.setenv("SUPABASE_KEY", "custom-key")
         monkeypatch.setenv("SIMILARITY_THRESHOLD", "0.8")
         monkeypatch.setenv("EMBEDDING_DIMENSION", "512")
-        s = Settings()
+        s = Settings(_env_file=None)
         assert s.SUPABASE_URL == "https://custom.supabase.co"
         assert s.SIMILARITY_THRESHOLD == 0.8
         assert s.EMBEDDING_DIMENSION == 512
@@ -166,6 +166,12 @@ class TestFAQAnalyzeRequest:
             FAQAnalyzeRequest(questions=["q"], top_k=0)
         with pytest.raises(ValidationError):
             FAQAnalyzeRequest(questions=["q"], top_k=51)
+
+    def test_blank_question_rejected(self):
+        with pytest.raises(ValidationError):
+            FAQAnalyzeRequest(questions=["유효한 질문", ""])
+        with pytest.raises(ValidationError):
+            FAQAnalyzeRequest(questions=["   "])
 
 
 class TestHealthResponse:
