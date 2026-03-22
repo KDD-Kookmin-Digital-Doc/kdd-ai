@@ -1,8 +1,16 @@
 """요청/응답 Pydantic 모델 정의."""
 
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+
+def _check_not_blank(v: str, field_name: str) -> str:
+    """문자열이 공백만으로 이루어져 있지 않은지 검증."""
+    if not v.strip():
+        raise ValueError(f"{field_name}이(가) 비어있거나 공백만 포함합니다.")
+    return v
 
 
 # ── Chat 관련 ──
@@ -14,6 +22,11 @@ class HistoryMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str = Field(..., min_length=1)
 
+    @field_validator("content")
+    @classmethod
+    def content_not_blank(cls, v: str) -> str:
+        return _check_not_blank(v, "content")
+
 
 class ChatRequest(BaseModel):
     """POST /api/chat 요청 모델."""
@@ -24,6 +37,11 @@ class ChatRequest(BaseModel):
     is_first_message: bool
     history: list[HistoryMessage] = Field(default_factory=list)
 
+    @field_validator("message", "session_id", "user_context")
+    @classmethod
+    def fields_not_blank(cls, v: str, info) -> str:
+        return _check_not_blank(v, info.field_name)
+
 
 # ── Document Embed 관련 ──
 
@@ -31,9 +49,14 @@ class ChatRequest(BaseModel):
 class DocumentMetadata(BaseModel):
     """문서 메타데이터."""
 
-    doc_name: str
-    category: str
-    enforcement_date: str
+    doc_name: str = Field(..., min_length=1)
+    category: str = Field(..., min_length=1)
+    enforcement_date: date
+
+    @field_validator("doc_name", "category")
+    @classmethod
+    def fields_not_blank(cls, v: str, info) -> str:
+        return _check_not_blank(v, info.field_name)
 
 
 class DocumentChunk(BaseModel):
@@ -41,6 +64,11 @@ class DocumentChunk(BaseModel):
 
     content: str = Field(..., min_length=1)
     page: int = Field(..., ge=1)
+
+    @field_validator("content")
+    @classmethod
+    def content_not_blank(cls, v: str) -> str:
+        return _check_not_blank(v, "content")
 
 
 class EmbedRequest(BaseModel):
@@ -50,6 +78,11 @@ class EmbedRequest(BaseModel):
     metadata: DocumentMetadata
     chunks: list[DocumentChunk] = Field(..., min_length=1)
 
+    @field_validator("doc_id")
+    @classmethod
+    def doc_id_not_blank(cls, v: str) -> str:
+        return _check_not_blank(v, "doc_id")
+
 
 # ── FAQ 분석 관련 ──
 
@@ -58,6 +91,8 @@ class FAQAnalyzeRequest(BaseModel):
     """POST /api/faq/analyze 요청 모델."""
 
     questions: list[str] = Field(..., min_length=1)
+    top_k: int = Field(default=5, ge=1, le=50)
+    min_cluster_size: int = Field(default=2, ge=2)
 
     @field_validator("questions")
     @classmethod
@@ -67,8 +102,6 @@ class FAQAnalyzeRequest(BaseModel):
             if not q.strip():
                 raise ValueError(f"questions[{i}]이(가) 비어있거나 공백만 포함합니다.")
         return v
-    top_k: int = Field(default=5, ge=1, le=50)
-    min_cluster_size: int = Field(default=2, ge=2)
 
 
 # ── Health 관련 ──

@@ -80,6 +80,10 @@ class TestHistoryMessage:
         with pytest.raises(ValidationError):
             HistoryMessage(role="user", content="")
 
+    def test_blank_content_rejected(self):
+        with pytest.raises(ValidationError):
+            HistoryMessage(role="user", content="   ")
+
 
 class TestChatRequest:
     def test_valid_minimal(self):
@@ -119,6 +123,22 @@ class TestChatRequest:
                 is_first_message=True,
             )
 
+    def test_blank_fields_rejected(self):
+        with pytest.raises(ValidationError):
+            ChatRequest(
+                message="   ",
+                session_id="s",
+                user_context="ctx",
+                is_first_message=True,
+            )
+        with pytest.raises(ValidationError):
+            ChatRequest(
+                message="질문",
+                session_id="  ",
+                user_context="ctx",
+                is_first_message=True,
+            )
+
 
 class TestEmbedRequest:
     def test_valid(self):
@@ -149,6 +169,35 @@ class TestEmbedRequest:
     def test_invalid_page(self):
         with pytest.raises(ValidationError):
             DocumentChunk(content="내용", page=0)
+
+    def test_blank_doc_id_rejected(self):
+        with pytest.raises(ValidationError):
+            EmbedRequest(
+                doc_id="   ",
+                metadata=DocumentMetadata(
+                    doc_name="test.pdf",
+                    category="학사",
+                    enforcement_date="2026-03-01",
+                ),
+                chunks=[DocumentChunk(content="내용", page=1)],
+            )
+
+    def test_invalid_enforcement_date(self):
+        with pytest.raises(ValidationError):
+            DocumentMetadata(
+                doc_name="test.pdf",
+                category="학사",
+                enforcement_date="not-a-date",
+            )
+
+    def test_enforcement_date_parsed(self):
+        from datetime import date
+        meta = DocumentMetadata(
+            doc_name="test.pdf",
+            category="학사",
+            enforcement_date="2026-03-01",
+        )
+        assert meta.enforcement_date == date(2026, 3, 1)
 
 
 class TestFAQAnalyzeRequest:
