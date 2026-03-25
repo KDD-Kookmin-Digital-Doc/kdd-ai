@@ -211,7 +211,7 @@ class TestEmbedDocumentUnit:
         assert len(chunks_arg[0]["embedding"]) == 1024
 
     async def test_all_chunks_fail(self):
-        """모든 청크가 실패하면 embedded_chunk_count=0, insert 미호출."""
+        """모든 청크가 실패하면 embedded_chunk_count=0, 삭제/삽입 미호출."""
         settings = _create_settings()
         bedrock = _create_bedrock(fail_indices={0, 1, 2})
         supabase = _create_supabase()
@@ -222,6 +222,8 @@ class TestEmbedDocumentUnit:
         assert result["status"] == "partial_failure"
         assert result["embedded_chunk_count"] == 0
         assert len(result["failed_chunks"]) == 3
+        supabase.delete_document_chunks.assert_not_called()
+        supabase.invalidate_cache_by_doc_id.assert_not_called()
         supabase.insert_document_chunks.assert_not_called()
 
     async def test_failed_chunk_has_index_and_error(self):
@@ -235,8 +237,7 @@ class TestEmbedDocumentUnit:
 
         failed = result["failed_chunks"][0]
         assert failed["index"] == 2
-        assert "error" in failed
-        assert len(failed["error"]) > 0
+        assert failed["error"] == "embedding_failed"
 
     async def test_doc_id_in_response(self):
         """응답에 요청한 doc_id가 포함된다."""

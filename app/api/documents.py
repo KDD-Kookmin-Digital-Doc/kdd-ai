@@ -28,11 +28,7 @@ async def embed_document(
 
     동일 doc_id 재적재 시 기존 청크 삭제 + 캐시 무효화 후 새 청크 적재 (last-write-wins).
     """
-    # 1. 기존 doc_id 청크 삭제 + 캐시 무효화
-    await supabase.delete_document_chunks(request.doc_id)
-    await supabase.invalidate_cache_by_doc_id(request.doc_id)
-
-    # 2. 청크별 임베딩 생성
+    # 1. 청크별 임베딩 생성 (기존 데이터 삭제 전에 먼저 준비)
     embedded_chunks: list[dict] = []
     failed_chunks: list[dict] = []
 
@@ -52,12 +48,14 @@ async def embed_document(
                 },
             })
         except Exception as exc:
-            logger.warning("청크 %d 임베딩 실패: %s", i, exc)
-            failed_chunks.append({"index": i, "error": str(exc)})
+            logger.exception("청크 %d 임베딩 실패", i)
+            failed_chunks.append({"index": i, "error": "embedding_failed"})
 
-    # 3. 성공분 일괄 삽입
+    # 2. 성공분이 있을 때만 기존 삭제 + 새 청크 삽입
     inserted_count = 0
     if embedded_chunks:
+        await supabase.delete_document_chunks(request.doc_id)
+        await supabase.invalidate_cache_by_doc_id(request.doc_id)
         inserted_count = await supabase.insert_document_chunks(
             request.doc_id, embedded_chunks
         )
