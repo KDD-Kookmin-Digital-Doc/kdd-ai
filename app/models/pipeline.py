@@ -30,6 +30,7 @@ class SearchResult:
 class SourceDoc:
     """출처 정보."""
 
+    doc_id: str
     doc_name: str
     page: int
 

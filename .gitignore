@@ -18,3 +18,9 @@ build/
 
 # Kiro
 .kiro/
+
+# Claude Code
+.claude/
+
+# Hypothesis
+.hypothesis/
