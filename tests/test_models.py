@@ -273,7 +273,7 @@ class TestSearchResult:
 
 class TestSourceDoc:
     def test_creation(self):
-        s = SourceDoc(doc_name="test.pdf", page=3)
+        s = SourceDoc(doc_id="doc-1", doc_name="test.pdf", page=3)
         assert s.page == 3
 
 
@@ -294,7 +294,7 @@ class TestPipelineContext:
     def test_mutable_defaults_isolation(self):
         ctx1 = PipelineContext(original_question="q1")
         ctx2 = PipelineContext(original_question="q2")
-        ctx1.source_docs.append(SourceDoc(doc_name="a.pdf", page=1))
+        ctx1.source_docs.append(SourceDoc(doc_id="doc-a", doc_name="a.pdf", page=1))
         assert len(ctx2.source_docs) == 0
 
 
