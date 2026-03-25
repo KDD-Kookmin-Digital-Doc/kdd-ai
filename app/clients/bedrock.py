@@ -114,15 +114,17 @@ class BedrockClient:
         messages: list[dict],
         max_tokens: int = 1024,
         model: str = "light",
+        usage_out: TokenUsage | None = None,
     ) -> AsyncGenerator[str, None]:
         """LLM 스트리밍 호출. 토큰 단위로 yield.
 
         Args:
             model: "light" (재작성/의도분류) 또는 "answer" (답변 생성).
+            usage_out: 제공 시 토큰 사용량을 이 객체에 기록 (동시 요청 안전).
+                       미제공 시 ``self.last_stream_usage``에 기록 (하위 호환).
 
         스트리밍 완료 후 토큰 사용량은 Bedrock 스트림의 마지막 metadata
-        이벤트에서 수집하며, Generator 소진 후 ``self.last_stream_usage``
-        속성으로 접근 가능하다.
+        이벤트에서 수집된다.
         """
         self.last_stream_usage = TokenUsage()
         model_id = self._answer_model_id if model == "answer" else self._light_model_id
@@ -170,11 +172,16 @@ class BedrockClient:
                     usage = event["metadata"].get("usage", {})
                     inp = usage.get("inputTokens", 0)
                     out = usage.get("outputTokens", 0)
-                    self.last_stream_usage = TokenUsage(
+                    recorded = TokenUsage(
                         prompt_tokens=inp,
                         completion_tokens=out,
                         total_tokens=inp + out,
                     )
+                    self.last_stream_usage = recorded
+                    if usage_out is not None:
+                        usage_out.prompt_tokens = recorded.prompt_tokens
+                        usage_out.completion_tokens = recorded.completion_tokens
+                        usage_out.total_tokens = recorded.total_tokens
         finally:
             stop_event.set()
             close_fn = getattr(response.get("stream"), "close", None)

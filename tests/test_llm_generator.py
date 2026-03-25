@@ -315,10 +315,11 @@ class TestGenerateResponse:
 
         async def _mock_stream(*args, **kwargs):
             call_log.append(kwargs)
+            if kwargs.get("usage_out") is not None:
+                kwargs["usage_out"].total_tokens = 0
             yield "답변"
 
         bedrock.invoke_llm_stream = _mock_stream
-        bedrock.last_stream_usage = TokenUsage()
 
         ctx = _make_context(
             intent="academic",
@@ -338,10 +339,11 @@ class TestGenerateResponse:
 
         async def _mock_stream(*args, **kwargs):
             call_log.append(kwargs)
+            if kwargs.get("usage_out") is not None:
+                kwargs["usage_out"].total_tokens = 0
             yield "인사"
 
         bedrock.invoke_llm_stream = _mock_stream
-        bedrock.last_stream_usage = TokenUsage()
 
         ctx = _make_context(intent="chitchat")
 
@@ -356,12 +358,14 @@ class TestGenerateResponse:
         bedrock = AsyncMock()
 
         async def _mock_stream(*args, **kwargs):
+            usage_out = kwargs.get("usage_out")
+            if usage_out is not None:
+                usage_out.prompt_tokens = 100
+                usage_out.completion_tokens = 20
+                usage_out.total_tokens = 120
             yield "토큰"
 
         bedrock.invoke_llm_stream = _mock_stream
-        bedrock.last_stream_usage = TokenUsage(
-            prompt_tokens=100, completion_tokens=20, total_tokens=120
-        )
 
         ctx = _make_context(
             intent="academic",
@@ -384,11 +388,12 @@ class TestGenerateResponse:
         bedrock = AsyncMock()
 
         async def _mock_stream(*args, **kwargs):
+            if kwargs.get("usage_out") is not None:
+                kwargs["usage_out"].total_tokens = 0
             yield "안녕"
             yield "하세요"
 
         bedrock.invoke_llm_stream = _mock_stream
-        bedrock.last_stream_usage = TokenUsage()
 
         ctx = _make_context(
             intent="academic",
