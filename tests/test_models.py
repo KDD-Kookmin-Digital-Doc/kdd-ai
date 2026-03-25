@@ -34,7 +34,8 @@ class TestSettings:
         monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
         monkeypatch.setenv("SUPABASE_KEY", "test-key")
         s = Settings(_env_file=None)
-        assert s.BEDROCK_LLM_MODEL_ID == "anthropic.claude-3-haiku-20240307-v1:0"
+        assert s.BEDROCK_LIGHT_MODEL_ID == "anthropic.claude-3-haiku-20240307-v1:0"
+        assert s.BEDROCK_ANSWER_MODEL_ID == "anthropic.claude-3-5-sonnet-20241022-v2:0"
         assert s.BEDROCK_EMBEDDING_MODEL_ID == "cohere.embed-multilingual-v3"
         assert s.EMBEDDING_DIMENSION == 1024
         assert s.LLM_CONTEXT_WINDOW == 200000

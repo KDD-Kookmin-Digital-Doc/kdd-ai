@@ -56,7 +56,8 @@ class BedrockClient:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._llm_model_id = settings.BEDROCK_LLM_MODEL_ID
+        self._light_model_id = settings.BEDROCK_LIGHT_MODEL_ID
+        self._answer_model_id = settings.BEDROCK_ANSWER_MODEL_ID
         self._embedding_model_id = settings.BEDROCK_EMBEDDING_MODEL_ID
         self._max_retries = 2
 
@@ -112,18 +113,23 @@ class BedrockClient:
         system_prompt: str,
         messages: list[dict],
         max_tokens: int = 1024,
+        model: str = "light",
     ) -> AsyncGenerator[str, None]:
-        """Claude 3 Haiku 스트리밍 호출. 토큰 단위로 yield.
+        """LLM 스트리밍 호출. 토큰 단위로 yield.
+
+        Args:
+            model: "light" (재작성/의도분류) 또는 "answer" (답변 생성).
 
         스트리밍 완료 후 토큰 사용량은 Bedrock 스트림의 마지막 metadata
         이벤트에서 수집하며, Generator 소진 후 ``self.last_stream_usage``
         속성으로 접근 가능하다.
         """
         self.last_stream_usage = TokenUsage()
+        model_id = self._answer_model_id if model == "answer" else self._light_model_id
 
         response = await self._retry_async(
             self._llm_client.converse_stream,
-            modelId=self._llm_model_id,
+            modelId=model_id,
             system=[{"text": system_prompt}],
             messages=messages,
             inferenceConfig={"maxTokens": max_tokens},
@@ -181,11 +187,17 @@ class BedrockClient:
         system_prompt: str,
         messages: list[dict],
         max_tokens: int = 512,
+        model: str = "light",
     ) -> tuple[str, TokenUsage]:
-        """Claude 3 Haiku 비스트리밍 호출. 질문 재작성, 의도 분류에 사용."""
+        """LLM 비스트리밍 호출. 질문 재작성, 의도 분류에 사용.
+
+        Args:
+            model: "light" (재작성/의도분류) 또는 "answer" (답변 생성).
+        """
+        model_id = self._answer_model_id if model == "answer" else self._light_model_id
         response = await self._retry_async(
             self._llm_client.converse,
-            modelId=self._llm_model_id,
+            modelId=model_id,
             system=[{"text": system_prompt}],
             messages=messages,
             inferenceConfig={"maxTokens": max_tokens},
@@ -233,7 +245,7 @@ class BedrockClient:
         try:
             await asyncio.to_thread(
                 self._llm_client.converse,
-                modelId=self._llm_model_id,
+                modelId=self._light_model_id,
                 messages=[
                     {"role": "user", "content": [{"text": "ping"}]}
                 ],
