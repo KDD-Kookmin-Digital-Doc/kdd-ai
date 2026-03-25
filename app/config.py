@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,6 +34,21 @@ class Settings(BaseSettings):
     # 유사도 임계값
     SIMILARITY_THRESHOLD: float = 0.75
     CACHE_SIMILARITY_THRESHOLD: float = 0.95
+
+    # confidence 임계값
+    CONFIDENCE_HIGH_THRESHOLD: float = 0.9
+    CONFIDENCE_MEDIUM_THRESHOLD: float = 0.8
+
+    @model_validator(mode="after")
+    def _validate_confidence_thresholds(self) -> "Settings":
+        med = self.CONFIDENCE_MEDIUM_THRESHOLD
+        high = self.CONFIDENCE_HIGH_THRESHOLD
+        if not (0 <= med <= high <= 1):
+            raise ValueError(
+                f"confidence 임계값이 유효하지 않습니다: "
+                f"0 <= MEDIUM({med}) <= HIGH({high}) <= 1 이어야 합니다."
+            )
+        return self
 
     # 캐시 만료 정책
     CACHE_TTL_DAYS: int = 90
