@@ -248,16 +248,17 @@ class BedrockClient:
             await asyncio.to_thread(stream.close)
 
     async def health_check_llm(self) -> bool:
-        """LLM 서비스 연결 상태 확인."""
+        """LLM 서비스 연결 상태 확인 (light + answer 모델 모두 확인)."""
         try:
-            await asyncio.to_thread(
-                self._llm_client.converse,
-                modelId=self._light_model_id,
-                messages=[
-                    {"role": "user", "content": [{"text": "ping"}]}
-                ],
-                inferenceConfig={"maxTokens": 1},
-            )
+            for model_id in (self._light_model_id, self._answer_model_id):
+                await asyncio.to_thread(
+                    self._llm_client.converse,
+                    modelId=model_id,
+                    messages=[
+                        {"role": "user", "content": [{"text": "ping"}]}
+                    ],
+                    inferenceConfig={"maxTokens": 1},
+                )
             return True
         except Exception as exc:
             logger.warning("Bedrock LLM 헬스체크 실패: %s", exc)
