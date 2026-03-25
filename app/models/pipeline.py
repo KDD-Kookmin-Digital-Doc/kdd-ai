@@ -35,19 +35,18 @@ class SourceDoc:
 
 
 @dataclass
-class QuestionLog:
-    """질문 로그 레코드."""
+class AnswerCache:
+    """답변 캐시 레코드. 학사규정 질문의 정상 답변 완료 시에만 저장."""
 
     question: str
-    embedding: list[float] | None
-    answer: str | None
-    intent: str
+    embedding: list[float]
+    answer: str
     source_doc_ids: list[str]
     sources: list[dict]
 
 
 @dataclass
-class QuestionLogMatch:
+class CacheMatch:
     """시맨틱 캐시 매칭 결과."""
 
     question: str
