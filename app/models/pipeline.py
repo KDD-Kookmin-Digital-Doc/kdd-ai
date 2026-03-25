@@ -70,4 +70,5 @@ class PipelineContext:
     user_context: str = ""
     history: list = field(default_factory=list)
     source_docs: list[SourceDoc] = field(default_factory=list)
+    suggested_questions: list[str] = field(default_factory=list)
     token_usage: TokenUsage = field(default_factory=TokenUsage)
