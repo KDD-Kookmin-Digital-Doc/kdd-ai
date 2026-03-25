@@ -65,7 +65,7 @@ async def _collect_chunks(async_gen) -> list[dict]:
     """SSE 스트림에서 청크를 수집하여 파싱된 dict 리스트로 반환."""
     chunks = []
     async for event in async_gen:
-        data_str = event.replace("data: ", "").strip()
+        data_str = event.removeprefix("data: ").strip()
         if data_str:
             chunks.append(json.loads(data_str))
     return chunks
@@ -377,14 +377,15 @@ class TestDetermineConfidence:
 
     def test_custom_thresholds(self):
         """settings에서 커스텀 임계값을 사용한다."""
-        os.environ["CONFIDENCE_HIGH_THRESHOLD"] = "0.95"
-        os.environ["CONFIDENCE_MEDIUM_THRESHOLD"] = "0.85"
-        settings = Settings(_env_file=None)
-        results = [_make_search_result(similarity=0.9)]
-        assert _determine_confidence(results, settings) == "medium"
-        # cleanup
-        del os.environ["CONFIDENCE_HIGH_THRESHOLD"]
-        del os.environ["CONFIDENCE_MEDIUM_THRESHOLD"]
+        with patch.dict(os.environ, {
+            "SUPABASE_URL": "https://test.supabase.co",
+            "SUPABASE_KEY": "test-key",
+            "CONFIDENCE_HIGH_THRESHOLD": "0.95",
+            "CONFIDENCE_MEDIUM_THRESHOLD": "0.85",
+        }):
+            settings = Settings(_env_file=None)
+            results = [_make_search_result(similarity=0.9)]
+            assert _determine_confidence(results, settings) == "medium"
 
 
 # ── SSE 포맷 테스트 ──

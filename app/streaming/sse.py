@@ -53,6 +53,8 @@ async def stream_sse_response(
     try:
         # 시나리오 C: 캐시 히트
         if context.cache_hit:
+            if not context.cached_answer:
+                raise ValueError("cache_hit=True이지만 cached_answer가 없습니다")
             sources = [
                 {"doc_id": s.doc_id, "doc_name": s.doc_name, "page": s.page}
                 for s in context.cached_sources
