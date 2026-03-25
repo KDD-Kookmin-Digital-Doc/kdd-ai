@@ -71,7 +71,7 @@ class TestInvokeLLM:
         ]
 
         with patch("asyncio.sleep"):
-            text, usage = await bedrock_client.invoke_llm(
+            text, _ = await bedrock_client.invoke_llm(
                 "prompt",
                 [{"role": "user", "content": [{"text": "q"}]}],
             )
@@ -90,6 +90,31 @@ class TestInvokeLLM:
                 )
 
         assert bedrock_client._llm_client.converse.call_count == 3  # 1 + 2 retries
+
+    async def test_http_5xx_triggers_retry(self, bedrock_client):
+        """HTTP 5xx 상태 코드는 에러 코드명과 무관하게 재시도."""
+        error = ClientError(
+            {
+                "Error": {"Code": "UnknownServerError", "Message": "unknown"},
+                "ResponseMetadata": {"HTTPStatusCode": 503},
+            },
+            "TestOperation",
+        )
+        bedrock_client._llm_client.converse.side_effect = [
+            error,
+            {
+                "output": {"message": {"content": [{"text": "ok"}]}},
+                "usage": {"inputTokens": 1, "outputTokens": 1},
+            },
+        ]
+
+        with patch("asyncio.sleep"):
+            text, _ = await bedrock_client.invoke_llm(
+                "p", [{"role": "user", "content": [{"text": "q"}]}]
+            )
+
+        assert text == "ok"
+        assert bedrock_client._llm_client.converse.call_count == 2
 
     async def test_non_retryable_error_raises_immediately(self, bedrock_client):
         """ValidationException 등 비재시도 에러는 즉시 raise."""

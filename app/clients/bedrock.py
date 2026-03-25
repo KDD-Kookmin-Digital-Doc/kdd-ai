@@ -46,7 +46,8 @@ def _is_retryable(exc: Exception) -> bool:
         return True
     if isinstance(exc, ClientError):
         code = exc.response.get("Error", {}).get("Code", "")
-        return code in _RETRYABLE_ERROR_CODES
+        status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
+        return code in _RETRYABLE_ERROR_CODES or status >= 500
     return False
 
 
@@ -219,8 +220,13 @@ class BedrockClient:
             accept="application/json",
         )
 
-        response_body = json.loads(response["body"].read())
-        return response_body["embeddings"]
+        stream = response["body"]
+        try:
+            raw = await asyncio.to_thread(stream.read)
+            response_body = json.loads(raw)
+            return response_body["embeddings"]
+        finally:
+            await asyncio.to_thread(stream.close)
 
     async def health_check_llm(self) -> bool:
         """LLM 서비스 연결 상태 확인."""

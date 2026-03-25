@@ -6,6 +6,7 @@ import asyncio
 import logging
 
 from supabase import Client, create_client
+from supabase.lib.client_options import ClientOptions
 
 from app.config import Settings
 from app.models.pipeline import AnswerCache, CacheMatch, SearchResult
@@ -19,7 +20,12 @@ class SupabaseVectorClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._client: Client = create_client(
-            settings.SUPABASE_URL, settings.SUPABASE_KEY
+            settings.SUPABASE_URL,
+            settings.SUPABASE_KEY,
+            options=ClientOptions(
+                postgrest_client_timeout=settings.SUPABASE_TIMEOUT,
+                storage_client_timeout=settings.SUPABASE_TIMEOUT,
+            ),
         )
         self._timeout = settings.SUPABASE_TIMEOUT
 
@@ -129,6 +135,8 @@ class SupabaseVectorClient:
         self, doc_id: str, chunks: list[dict]
     ) -> int:
         """문서 청크를 documents 테이블에 일괄 삽입. 삽입된 행 수 반환."""
+        if not chunks:
+            return 0
         payload = [{**chunk, "doc_id": doc_id} for chunk in chunks]
         result = await self._run_with_timeout(
             lambda: self._client.table("documents").insert(payload).execute()

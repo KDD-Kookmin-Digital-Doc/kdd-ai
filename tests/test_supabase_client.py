@@ -216,6 +216,15 @@ class TestInsertDocumentChunks:
 
         assert count == 2
 
+    async def test_empty_chunks_returns_zero(self, supabase_setup):
+        """빈 chunks 리스트는 DB 호출 없이 0 반환."""
+        client, mock_sb = supabase_setup
+
+        count = await client.insert_document_chunks("doc-1", [])
+
+        assert count == 0
+        mock_sb.table.return_value.insert.assert_not_called()
+
     async def test_doc_id_injected_into_chunks(self, supabase_setup):
         """chunks에 doc_id가 없어도 메서드가 자동으로 주입."""
         client, mock_sb = supabase_setup
