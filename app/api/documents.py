@@ -86,3 +86,30 @@ async def embed_document(
         "doc_id": request.doc_id,
         "embedded_chunk_count": inserted_count,
     }
+
+
+@router.delete("/api/documents/{doc_id}")
+async def delete_document(
+    doc_id: str,
+    supabase: SupabaseVectorClient = Depends(get_supabase_client),
+) -> dict:
+    """문서 벡터 데이터를 삭제하고 관련 캐시를 무효화한다.
+
+    존재하지 않는 doc_id에 대해서도 카운트 0으로 성공 응답을 반환한다 (멱등성).
+    """
+    deleted_chunk_count = await supabase.delete_document_chunks(doc_id)
+    invalidated_cache_count = await supabase.invalidate_cache_by_doc_id(doc_id)
+
+    logger.info(
+        "문서 삭제 완료: doc_id=%s, deleted_chunks=%d, invalidated_caches=%d",
+        doc_id,
+        deleted_chunk_count,
+        invalidated_cache_count,
+    )
+    return {
+        "status": "success",
+        "doc_id": doc_id,
+        "deleted_chunk_count": deleted_chunk_count,
+        "invalidated_cache_count": invalidated_cache_count,
+        "message": "문서 삭제가 완료되었습니다.",
+    }
