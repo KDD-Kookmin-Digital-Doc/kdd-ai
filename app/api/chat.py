@@ -24,6 +24,8 @@ from app.streaming.sse import stream_sse_response
 
 logger = logging.getLogger(__name__)
 
+_pending_cache_writes: set[asyncio.Task] = set()
+
 router = APIRouter()
 
 
@@ -75,33 +77,45 @@ async def _streaming_wrapper(
 ) -> AsyncGenerator[str, None]:
     """SSE 스트리밍을 래핑하여 답변 버퍼링 + 캐시 저장 + disconnect 감지를 처리한다."""
     answer_buffer: list[str] = []
+    stream_completed = False
     should_cache = (
         not context.cache_hit
         and context.intent == "academic"
         and context.search_results
     )
 
-    async for chunk in stream_sse_response(context, bedrock, settings):
-        if await http_request.is_disconnected():
-            logger.info("클라이언트 disconnect 감지 — 스트리밍 중단")
-            return
+    stream = stream_sse_response(context, bedrock, settings)
+    try:
+        async for chunk in stream:
+            if await http_request.is_disconnected():
+                logger.info("클라이언트 disconnect 감지 — 스트리밍 중단")
+                return
 
-        # 답변 텍스트 버퍼링 (캐시 저장용)
-        if should_cache and '"type": "text"' in chunk:
-            try:
-                data = json.loads(chunk.removeprefix("data: ").strip())
-                if data.get("type") == "text" and data.get("content"):
-                    answer_buffer.append(data["content"])
-            except (json.JSONDecodeError, AttributeError):
-                pass
+            # 이벤트 파싱
+            event = None
+            if chunk.startswith("data: "):
+                try:
+                    event = json.loads(chunk.removeprefix("data: ").strip())
+                except (json.JSONDecodeError, AttributeError):
+                    pass
 
-        yield chunk
+            # 답변 텍스트 버퍼링 (캐시 저장용)
+            if event and event.get("type") == "text" and should_cache and event.get("content"):
+                answer_buffer.append(event["content"])
+            elif event and event.get("type") == "done":
+                stream_completed = True
 
-    # 스트리밍 완료 후 캐시 저장 (학사규정 정상 답변 시에만)
-    if should_cache and answer_buffer:
-        asyncio.create_task(
+            yield chunk
+    finally:
+        await stream.aclose()
+
+    # 스트리밍 완료 후 캐시 저장 (정상 완료 + 학사규정 답변 시에만)
+    if should_cache and stream_completed and answer_buffer:
+        task = asyncio.create_task(
             _save_answer_cache(context, answer_buffer, bedrock, supabase)
         )
+        _pending_cache_writes.add(task)
+        task.add_done_callback(_pending_cache_writes.discard)
 
 
 async def _save_answer_cache(

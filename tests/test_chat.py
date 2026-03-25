@@ -28,9 +28,11 @@ from app.api.chat import _run_pipeline, _save_answer_cache, _streaming_wrapper
 
 
 def _create_settings() -> Settings:
-    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
-    os.environ.setdefault("SUPABASE_KEY", "test-key")
-    return Settings(_env_file=None)
+    with patch.dict(os.environ, {
+        "SUPABASE_URL": "https://test.supabase.co",
+        "SUPABASE_KEY": "test-key",
+    }):
+        return Settings(_env_file=None)
 
 
 def _create_bedrock() -> AsyncMock:
@@ -508,5 +510,6 @@ class TestClientDisconnect:
             ):
                 chunks.append(chunk)
 
-        # disconnect 후 extra 청크는 수신되지 않아야 함
-        assert len(chunks) <= 2
+        # disconnect 전 첫 번째 청크만 수신되어야 함
+        assert len(chunks) == 1
+        assert "fallback" in chunks[0]
