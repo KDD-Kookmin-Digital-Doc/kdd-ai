@@ -38,6 +38,10 @@ async def search_documents(
         threshold=settings.SIMILARITY_THRESHOLD,
     )
 
+    context.search_results = []
+    context.source_docs = []
+    context.suggested_questions = []
+
     if results:
         context.search_results = results
         context.source_docs = [
@@ -54,7 +58,6 @@ async def search_documents(
             results[0].similarity_score,
         )
     else:
-        context.search_results = []
         suggested = await supabase.search_similar_questions(
             embedding=question_embedding,
             top_k=3,
