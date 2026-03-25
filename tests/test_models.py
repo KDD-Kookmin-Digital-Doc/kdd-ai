@@ -7,9 +7,9 @@ from pydantic import ValidationError
 
 from app.config import Settings
 from app.models.pipeline import (
+    AnswerCache,
+    CacheMatch,
     PipelineContext,
-    QuestionLog,
-    QuestionLogMatch,
     SearchResult,
     SourceDoc,
     TokenUsage,
@@ -45,6 +45,7 @@ class TestSettings:
         assert s.BEDROCK_LLM_TIMEOUT == 30
         assert s.BEDROCK_EMBEDDING_TIMEOUT == 15
         assert s.SUPABASE_TIMEOUT == 10
+        assert s.CACHE_TTL_DAYS == 90
 
     def test_required_fields_missing(self, monkeypatch):
         monkeypatch.delenv("SUPABASE_URL", raising=False)
@@ -297,35 +298,22 @@ class TestPipelineContext:
         assert len(ctx2.source_docs) == 0
 
 
-class TestQuestionLog:
-    def test_academic(self):
-        log = QuestionLog(
+class TestAnswerCache:
+    def test_creation(self):
+        cache = AnswerCache(
             question="휴학 기간",
             embedding=[0.1] * 1024,
             answer="최대 4년입니다.",
-            intent="academic",
             source_doc_ids=["doc-1"],
             sources=[{"doc_name": "학사요람.pdf", "page": 45}],
         )
-        assert log.intent == "academic"
-        assert log.embedding is not None
-
-    def test_chitchat(self):
-        log = QuestionLog(
-            question="안녕",
-            embedding=None,
-            answer=None,
-            intent="chitchat",
-            source_doc_ids=[],
-            sources=[],
-        )
-        assert log.embedding is None
-        assert log.answer is None
+        assert cache.embedding is not None
+        assert cache.answer == "최대 4년입니다."
 
 
-class TestQuestionLogMatch:
+class TestCacheMatch:
     def test_creation(self):
-        m = QuestionLogMatch(
+        m = CacheMatch(
             question="휴학 기간",
             answer="최대 4년",
             similarity_score=0.97,

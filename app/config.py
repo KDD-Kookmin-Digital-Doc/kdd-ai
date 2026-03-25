@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     SIMILARITY_THRESHOLD: float = 0.75
     CACHE_SIMILARITY_THRESHOLD: float = 0.95
 
+    # 캐시 만료 정책
+    CACHE_TTL_DAYS: int = 90
+
     # 타임아웃 (초)
     BEDROCK_LLM_TIMEOUT: int = 30
     BEDROCK_EMBEDDING_TIMEOUT: int = 15
