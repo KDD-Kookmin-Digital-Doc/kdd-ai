@@ -158,6 +158,15 @@ class TestRewriteQueryUnit:
 
         assert result.rewritten_question == "재작성된 질문"
 
+    async def test_whitespace_only_rewrite_falls_back_to_original(self):
+        """LLM이 공백만 반환하면 원본 질문으로 폴백한다."""
+        bedrock = _create_bedrock(rewritten=" \n\t ")
+        ctx = _make_context(question="원본 질문", history=_make_history(2))
+
+        result = await rewrite_query(ctx, bedrock)
+
+        assert result.rewritten_question == "원본 질문"
+
     async def test_token_usage_accumulated(self):
         """토큰 사용량이 기존 값에 합산된다."""
         bedrock = _create_bedrock(prompt_tokens=100, completion_tokens=30)

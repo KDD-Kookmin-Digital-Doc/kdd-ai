@@ -63,7 +63,8 @@ async def rewrite_query(
         max_tokens=512,
     )
 
-    context.rewritten_question = rewritten.strip()
+    cleaned = rewritten.strip()
+    context.rewritten_question = cleaned or context.original_question
     context.token_usage.prompt_tokens += usage.prompt_tokens
     context.token_usage.completion_tokens += usage.completion_tokens
     context.token_usage.total_tokens += usage.total_tokens
