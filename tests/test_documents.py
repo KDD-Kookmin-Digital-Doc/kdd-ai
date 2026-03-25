@@ -10,7 +10,7 @@ from hypothesis import strategies as st
 
 from app.config import Settings
 from app.models.schemas import DocumentChunk, DocumentMetadata, EmbedRequest
-from app.api.documents import embed_document
+from app.api.documents import delete_document, embed_document
 
 
 # ── 헬퍼 ──
@@ -267,3 +267,104 @@ class TestEmbedDocumentUnit:
         # 새로 적재
         assert result["embedded_chunk_count"] == 2
         assert result["status"] == "success"
+
+
+# ── Property 10: 문서 삭제 및 캐시 연쇄 무효화 ──
+# Validates: Requirements 10.1, 10.2
+
+
+class TestDeleteCascade:
+    """Property 10: DELETE 후 documents, answer_cache에서 해당 doc_id 관련 레코드 0개."""
+
+    async def test_delete_calls_both_tables(self):
+        """삭제 시 documents와 answer_cache 모두에서 삭제가 수행된다."""
+        supabase = _create_supabase()
+        supabase.delete_document_chunks.return_value = 5
+        supabase.invalidate_cache_by_doc_id.return_value = 2
+
+        result = await delete_document("doc-1", supabase)
+
+        supabase.delete_document_chunks.assert_called_once_with("doc-1")
+        supabase.invalidate_cache_by_doc_id.assert_called_once_with("doc-1")
+        assert result["deleted_chunk_count"] == 5
+        assert result["invalidated_cache_count"] == 2
+
+    async def test_response_includes_all_fields(self):
+        """응답에 status, doc_id, deleted_chunk_count, invalidated_cache_count, message 포함."""
+        supabase = _create_supabase()
+        supabase.delete_document_chunks.return_value = 3
+        supabase.invalidate_cache_by_doc_id.return_value = 1
+
+        result = await delete_document("doc-99", supabase)
+
+        assert result["status"] == "success"
+        assert result["doc_id"] == "doc-99"
+        assert result["deleted_chunk_count"] == 3
+        assert result["invalidated_cache_count"] == 1
+        assert "message" in result
+
+    @hyp_settings(max_examples=30)
+    @given(
+        doc_id=st.text(min_size=1, max_size=50).filter(lambda x: x.strip()),
+        chunk_count=st.integers(min_value=0, max_value=100),
+        cache_count=st.integers(min_value=0, max_value=50),
+    )
+    async def test_counts_match_db_response(self, doc_id, chunk_count, cache_count):
+        """응답 카운트가 DB 삭제 결과와 일치한다."""
+        supabase = _create_supabase()
+        supabase.delete_document_chunks.return_value = chunk_count
+        supabase.invalidate_cache_by_doc_id.return_value = cache_count
+
+        result = await delete_document(doc_id, supabase)
+
+        assert result["deleted_chunk_count"] == chunk_count
+        assert result["invalidated_cache_count"] == cache_count
+        assert result["status"] == "success"
+
+
+# ── Property 11: 문서 삭제 멱등성 ──
+# Validates: Requirements 10.4
+
+
+class TestDeleteIdempotency:
+    """Property 11: 여러 번 DELETE 수행 시 항상 성공, 존재하지 않는 doc_id는 카운트 0."""
+
+    async def test_nonexistent_doc_returns_zero_counts(self):
+        """존재하지 않는 doc_id도 카운트 0으로 성공 응답."""
+        supabase = _create_supabase()
+        supabase.delete_document_chunks.return_value = 0
+        supabase.invalidate_cache_by_doc_id.return_value = 0
+
+        result = await delete_document("doc-nonexistent", supabase)
+
+        assert result["status"] == "success"
+        assert result["deleted_chunk_count"] == 0
+        assert result["invalidated_cache_count"] == 0
+
+    async def test_double_delete_always_succeeds(self):
+        """같은 doc_id를 2번 삭제해도 항상 성공."""
+        supabase = _create_supabase()
+        supabase.delete_document_chunks.side_effect = [5, 0]
+        supabase.invalidate_cache_by_doc_id.side_effect = [2, 0]
+
+        result1 = await delete_document("doc-1", supabase)
+        result2 = await delete_document("doc-1", supabase)
+
+        assert result1["status"] == "success"
+        assert result1["deleted_chunk_count"] == 5
+        assert result2["status"] == "success"
+        assert result2["deleted_chunk_count"] == 0
+
+    @hyp_settings(max_examples=20)
+    @given(
+        repeat=st.integers(min_value=1, max_value=5),
+    )
+    async def test_multiple_deletes_always_success(self, repeat):
+        """N번 삭제해도 항상 status=success."""
+        supabase = _create_supabase()
+        supabase.delete_document_chunks.return_value = 0
+        supabase.invalidate_cache_by_doc_id.return_value = 0
+
+        for _ in range(repeat):
+            result = await delete_document("doc-1", supabase)
+            assert result["status"] == "success"
