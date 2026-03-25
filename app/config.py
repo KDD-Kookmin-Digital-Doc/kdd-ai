@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     SIMILARITY_THRESHOLD: float = 0.75
     CACHE_SIMILARITY_THRESHOLD: float = 0.95
 
+    # confidence 임계값
+    CONFIDENCE_HIGH_THRESHOLD: float = 0.9
+    CONFIDENCE_MEDIUM_THRESHOLD: float = 0.8
+
     # 캐시 만료 정책
     CACHE_TTL_DAYS: int = 90
 
