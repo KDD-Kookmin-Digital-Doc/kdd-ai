@@ -1,5 +1,6 @@
 """Supabase Vector DB 클라이언트 단위 테스트. 모킹 기반."""
 
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -117,6 +118,22 @@ class TestSearchAnswerCache:
 
         assert result is None
 
+    async def test_default_ttl_from_settings(self, supabase_setup):
+        """ttl_days 미지정 시 settings.CACHE_TTL_DAYS(기본 90) 사용."""
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(data=[])
+
+        await client.search_answer_cache([0.1] * 1024)
+
+        mock_sb.rpc.assert_called_once_with(
+            "match_answer_cache",
+            {
+                "query_embedding": [0.1] * 1024,
+                "match_threshold": 0.95,
+                "ttl_days": 90,  # settings 기본값
+            },
+        )
+
     async def test_custom_threshold_and_ttl(self, supabase_setup):
         client, mock_sb = supabase_setup
         mock_sb.rpc.return_value.execute.return_value = MagicMock(data=[])
@@ -133,6 +150,25 @@ class TestSearchAnswerCache:
                 "ttl_days": 30,
             },
         )
+
+    async def test_sources_none_returns_empty_list(self, supabase_setup):
+        """sources 값이 None이면 빈 리스트로 반환."""
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(
+            data=[
+                {
+                    "question": "질문",
+                    "answer": "답변",
+                    "similarity": 0.96,
+                    "sources": None,
+                }
+            ]
+        )
+
+        result = await client.search_answer_cache([0.1] * 1024)
+
+        assert result is not None
+        assert result.sources == []
 
 
 # ── search_similar_questions 테스트 ──
@@ -169,8 +205,8 @@ class TestInsertDocumentChunks:
     async def test_success(self, supabase_setup):
         client, mock_sb = supabase_setup
         chunks = [
-            {"doc_id": "doc-1", "content": "내용1", "embedding": [0.1] * 1024},
-            {"doc_id": "doc-1", "content": "내용2", "embedding": [0.2] * 1024},
+            {"content": "내용1", "embedding": [0.1] * 1024},
+            {"content": "내용2", "embedding": [0.2] * 1024},
         ]
         mock_sb.table.return_value.insert.return_value.execute.return_value = (
             MagicMock(data=[{"id": 1}, {"id": 2}])
@@ -179,6 +215,19 @@ class TestInsertDocumentChunks:
         count = await client.insert_document_chunks("doc-1", chunks)
 
         assert count == 2
+
+    async def test_doc_id_injected_into_chunks(self, supabase_setup):
+        """chunks에 doc_id가 없어도 메서드가 자동으로 주입."""
+        client, mock_sb = supabase_setup
+        chunks = [{"content": "내용", "embedding": [0.1] * 1024}]
+        mock_sb.table.return_value.insert.return_value.execute.return_value = (
+            MagicMock(data=[{"id": 1}])
+        )
+
+        await client.insert_document_chunks("doc-99", chunks)
+
+        inserted_payload = mock_sb.table.return_value.insert.call_args[0][0]
+        assert all(c["doc_id"] == "doc-99" for c in inserted_payload)
 
 
 # ── delete_document_chunks 테스트 ──
@@ -273,3 +322,18 @@ class TestHealthCheck:
         )
 
         assert await client.health_check() is False
+
+    async def test_timeout_applied(self, supabase_setup):
+        """타임아웃 초과 시 _run_with_timeout이 TimeoutError를 발생시킨다."""
+        client, mock_sb = supabase_setup
+        client._timeout = 0.01  # 10ms
+
+        def _slow_fn():
+            import time
+            time.sleep(1)
+            return MagicMock(data=[])
+
+        mock_sb.rpc.return_value.execute = _slow_fn
+
+        with pytest.raises(asyncio.TimeoutError):
+            await client.search_documents([0.1] * 1024)

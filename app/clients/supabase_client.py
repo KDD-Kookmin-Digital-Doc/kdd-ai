@@ -23,6 +23,15 @@ class SupabaseVectorClient:
         )
         self._timeout = settings.SUPABASE_TIMEOUT
 
+    # ── 내부 헬퍼 ──
+
+    async def _run_with_timeout(self, fn):
+        """동기 함수를 비동기로 실행하며 타임아웃을 적용한다."""
+        return await asyncio.wait_for(
+            asyncio.to_thread(fn),
+            timeout=self._timeout,
+        )
+
     # ── 벡터 검색 ──
 
     async def search_documents(
@@ -32,7 +41,7 @@ class SupabaseVectorClient:
         threshold: float = 0.75,
     ) -> list[SearchResult]:
         """documents 테이블에서 코사인 유사도 기반 벡터 검색."""
-        result = await asyncio.to_thread(
+        result = await self._run_with_timeout(
             lambda: self._client.rpc(
                 "match_documents",
                 {
@@ -58,7 +67,7 @@ class SupabaseVectorClient:
         self,
         embedding: list[float],
         threshold: float = 0.95,
-        ttl_days: int = 90,
+        ttl_days: int | None = None,
     ) -> CacheMatch | None:
         """answer_cache 테이블에서 시맨틱 캐시 탐색.
 
@@ -66,13 +75,17 @@ class SupabaseVectorClient:
         반환 시 sources JSONB 컬럼도 함께 조회하여 캐시 히트 시
         출처 정보를 포함한다.
         """
-        result = await asyncio.to_thread(
+        effective_ttl = (
+            self._settings.CACHE_TTL_DAYS if ttl_days is None else ttl_days
+        )
+
+        result = await self._run_with_timeout(
             lambda: self._client.rpc(
                 "match_answer_cache",
                 {
                     "query_embedding": embedding,
                     "match_threshold": threshold,
-                    "ttl_days": ttl_days,
+                    "ttl_days": effective_ttl,
                 },
             ).execute()
         )
@@ -86,7 +99,7 @@ class SupabaseVectorClient:
             question=row["question"],
             answer=row["answer"],
             similarity_score=row["similarity"],
-            sources=row.get("sources", []),
+            sources=row.get("sources") or [],
         )
 
     async def search_similar_questions(
@@ -98,7 +111,7 @@ class SupabaseVectorClient:
 
         임계값 없이 상위 top_k개 반환.
         """
-        result = await asyncio.to_thread(
+        result = await self._run_with_timeout(
             lambda: self._client.rpc(
                 "match_similar_questions",
                 {
@@ -116,14 +129,15 @@ class SupabaseVectorClient:
         self, doc_id: str, chunks: list[dict]
     ) -> int:
         """문서 청크를 documents 테이블에 일괄 삽입. 삽입된 행 수 반환."""
-        result = await asyncio.to_thread(
-            lambda: self._client.table("documents").insert(chunks).execute()
+        payload = [{**chunk, "doc_id": doc_id} for chunk in chunks]
+        result = await self._run_with_timeout(
+            lambda: self._client.table("documents").insert(payload).execute()
         )
         return len(result.data or [])
 
     async def delete_document_chunks(self, doc_id: str) -> int:
         """doc_id에 해당하는 모든 청크 삭제. 삭제된 행 수 반환."""
-        result = await asyncio.to_thread(
+        result = await self._run_with_timeout(
             lambda: self._client.table("documents")
             .delete()
             .eq("doc_id", doc_id)
@@ -135,7 +149,7 @@ class SupabaseVectorClient:
 
     async def invalidate_cache_by_doc_id(self, doc_id: str) -> int:
         """source_doc_ids에 해당 doc_id가 포함된 answer_cache 삭제."""
-        result = await asyncio.to_thread(
+        result = await self._run_with_timeout(
             lambda: self._client.table("answer_cache")
             .delete()
             .contains("source_doc_ids", [doc_id])
@@ -145,7 +159,7 @@ class SupabaseVectorClient:
 
     async def insert_answer_cache(self, cache: AnswerCache) -> None:
         """답변 캐시 저장. 학사규정 질문의 정상 답변 완료 시에만 호출."""
-        await asyncio.to_thread(
+        await self._run_with_timeout(
             lambda: self._client.table("answer_cache")
             .insert(
                 {
@@ -164,7 +178,7 @@ class SupabaseVectorClient:
     async def health_check(self) -> bool:
         """DB 연결 상태 확인."""
         try:
-            await asyncio.to_thread(
+            await self._run_with_timeout(
                 lambda: self._client.table("documents")
                 .select("id")
                 .limit(1)

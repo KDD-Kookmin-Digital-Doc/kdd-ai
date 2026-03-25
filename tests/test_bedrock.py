@@ -27,7 +27,15 @@ def bedrock_client(settings):
     return client
 
 
-def _make_client_error(code: str = "500", message: str = "error"):
+def _make_client_error(code: str = "ThrottlingException", message: str = "error"):
+    """재시도 가능한 ClientError 생성 (기본: ThrottlingException)."""
+    return ClientError(
+        {"Error": {"Code": code, "Message": message}}, "TestOperation"
+    )
+
+
+def _make_non_retryable_error(code: str = "ValidationException", message: str = "bad input"):
+    """재시도 불가능한 ClientError 생성."""
     return ClientError(
         {"Error": {"Code": code, "Message": message}}, "TestOperation"
     )
@@ -82,6 +90,18 @@ class TestInvokeLLM:
                 )
 
         assert bedrock_client._llm_client.converse.call_count == 3  # 1 + 2 retries
+
+    async def test_non_retryable_error_raises_immediately(self, bedrock_client):
+        """ValidationException 등 비재시도 에러는 즉시 raise."""
+        bedrock_client._llm_client.converse.side_effect = _make_non_retryable_error()
+
+        with pytest.raises(ClientError):
+            await bedrock_client.invoke_llm(
+                "prompt",
+                [{"role": "user", "content": [{"text": "q"}]}],
+            )
+
+        assert bedrock_client._llm_client.converse.call_count == 1  # 재시도 없음
 
     async def test_timeout_triggers_retry(self, bedrock_client):
         bedrock_client._llm_client.converse.side_effect = [

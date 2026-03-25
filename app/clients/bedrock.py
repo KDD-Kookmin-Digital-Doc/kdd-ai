@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from typing import AsyncGenerator
 
 import boto3
@@ -20,12 +21,33 @@ from app.models.pipeline import TokenUsage
 
 logger = logging.getLogger(__name__)
 
+# ClientError 중 재시도 가능한 에러 코드 (throttling, 5xx 계열)
+_RETRYABLE_ERROR_CODES = frozenset({
+    "ThrottlingException",
+    "TooManyRequestsException",
+    "ServiceQuotaExceededException",
+    "InternalServerException",
+    "InternalFailure",
+    "ServiceUnavailableException",
+    "ModelNotReadyException",
+})
+
+# ClientError 외 무조건 재시도 대상인 예외
 _RETRYABLE_EXCEPTIONS = (
-    ClientError,
     ReadTimeoutError,
     EndpointConnectionError,
     ConnectionError,
 )
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """재시도 가능한 예외인지 판별한다."""
+    if isinstance(exc, _RETRYABLE_EXCEPTIONS):
+        return True
+    if isinstance(exc, ClientError):
+        code = exc.response.get("Error", {}).get("Code", "")
+        return code in _RETRYABLE_ERROR_CODES
+    return False
 
 
 class BedrockClient:
@@ -64,7 +86,9 @@ class BedrockClient:
         for attempt in range(self._max_retries + 1):
             try:
                 return await asyncio.to_thread(sync_callable, *args, **kwargs)
-            except _RETRYABLE_EXCEPTIONS as exc:
+            except (ClientError, *_RETRYABLE_EXCEPTIONS) as exc:
+                if not _is_retryable(exc):
+                    raise
                 last_exc = exc
                 if attempt < self._max_retries:
                     delay = 2**attempt  # 1초, 2초
@@ -107,10 +131,13 @@ class BedrockClient:
         loop = asyncio.get_running_loop()
         event_queue: asyncio.Queue = asyncio.Queue()
         _sentinel = object()
+        stop_event = threading.Event()
 
         def _read_stream() -> None:
             try:
                 for event in response["stream"]:
+                    if stop_event.is_set():
+                        break
                     loop.call_soon_threadsafe(event_queue.put_nowait, event)
             except Exception as exc:
                 loop.call_soon_threadsafe(event_queue.put_nowait, exc)
@@ -142,6 +169,10 @@ class BedrockClient:
                         total_tokens=inp + out,
                     )
         finally:
+            stop_event.set()
+            close_fn = getattr(response.get("stream"), "close", None)
+            if callable(close_fn):
+                await asyncio.to_thread(close_fn)
             await read_future
 
     async def invoke_llm(
@@ -217,13 +248,15 @@ class BedrockClient:
                     "truncate": "NONE",
                 }
             )
-            await asyncio.to_thread(
+            response = await asyncio.to_thread(
                 self._embedding_client.invoke_model,
                 modelId=self._embedding_model_id,
                 body=body,
                 contentType="application/json",
                 accept="application/json",
             )
+            await asyncio.to_thread(response["body"].read)
+            await asyncio.to_thread(response["body"].close)
             return True
         except Exception as exc:
             logger.warning("Bedrock Embedding 헬스체크 실패: %s", exc)
