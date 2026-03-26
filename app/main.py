@@ -36,7 +36,7 @@ def create_app() -> FastAPI:
     """FastAPI 앱 인스턴스를 생성하고 설정한다."""
     app = FastAPI(
         title="학사규정 RAG AI 챗봇",
-        description="학사규정 RAG(검색 증강 생��) AI 챗봇 서버",
+        description="학사규정 RAG(검색 증강 생성) AI 챗봇 서버",
         version="0.1.0",
         lifespan=lifespan,
     )
