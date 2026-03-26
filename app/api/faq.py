@@ -11,7 +11,7 @@ from app.api.dependencies import get_bedrock_client, get_supabase_client
 from app.clients.bedrock import BedrockClient
 from app.clients.supabase_client import SupabaseVectorClient
 from app.config import Settings, get_settings
-from app.models.schemas import FAQAnalyzeRequest
+from app.models.schemas import ErrorResponse, FAQAnalyzeRequest
 from app.services.faq_analyzer import InsufficientDataError, analyze_faq
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/api/faq/analyze", response_model=None)
+@router.post("/api/faq/analyze", response_model=None, responses={
+    400: {"model": ErrorResponse, "description": "필수 파라미터 누락 / 분석 데이터 부족"},
+    422: {"model": ErrorResponse, "description": "타입 불일치 / 제약조건 위반"},
+    503: {"model": ErrorResponse, "description": "외부 서비스 장애"},
+})
 async def faq_analyze(
     request: FAQAnalyzeRequest,
     settings: Settings = Depends(get_settings),

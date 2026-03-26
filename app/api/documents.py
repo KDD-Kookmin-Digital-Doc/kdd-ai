@@ -10,14 +10,18 @@ from app.api.dependencies import get_bedrock_client, get_supabase_client
 from app.clients.bedrock import BedrockClient
 from app.clients.supabase_client import SupabaseVectorClient
 from app.config import Settings, get_settings
-from app.models.schemas import EmbedRequest
+from app.models.schemas import EmbedRequest, ErrorResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-@router.post("/api/documents/embed")
+@router.post("/api/documents/embed", responses={
+    400: {"model": ErrorResponse, "description": "필수 파라미터 누락"},
+    422: {"model": ErrorResponse, "description": "타입 불일치 / 제약조건 위반"},
+    503: {"model": ErrorResponse, "description": "외부 서비스 장애"},
+})
 async def embed_document(
     request: EmbedRequest,
     settings: Settings = Depends(get_settings),
@@ -88,7 +92,9 @@ async def embed_document(
     }
 
 
-@router.delete("/api/documents/{doc_id}")
+@router.delete("/api/documents/{doc_id}", responses={
+    503: {"model": ErrorResponse, "description": "외부 서비스 장애"},
+})
 async def delete_document(
     doc_id: str,
     supabase: SupabaseVectorClient = Depends(get_supabase_client),

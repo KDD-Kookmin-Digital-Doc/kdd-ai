@@ -15,7 +15,7 @@ from app.clients.bedrock import BedrockClient
 from app.clients.supabase_client import SupabaseVectorClient
 from app.config import Settings, get_settings
 from app.models.pipeline import AnswerCache, PipelineContext
-from app.models.schemas import ChatRequest
+from app.models.schemas import ChatRequest, ErrorResponse
 from app.pipeline.intent_router import classify_intent
 from app.pipeline.query_rewriter import rewrite_query
 from app.pipeline.semantic_cache import check_cache
@@ -149,7 +149,11 @@ async def _save_answer_cache(
         logger.warning("답변 캐시 저장 실패 — 사용자 응답에 영향 없음", exc_info=True)
 
 
-@router.post("/api/chat")
+@router.post("/api/chat", responses={
+    400: {"model": ErrorResponse, "description": "필수 파라미터 누락"},
+    422: {"model": ErrorResponse, "description": "타입 불일치 / 제약조건 위반"},
+    503: {"model": ErrorResponse, "description": "외부 서비스 장애"},
+})
 async def chat(
     request: ChatRequest,
     http_request: Request,

@@ -50,6 +50,9 @@ class Settings(BaseSettings):
             )
         return self
 
+    # CORS 설정 (미설정 시 CORS 비활성)
+    CORS_ORIGINS: list[str] = []
+
     # 캐시 만료 정책
     CACHE_TTL_DAYS: int = 90
 
