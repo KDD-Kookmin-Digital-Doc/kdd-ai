@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import chat, documents, faq, health
+from app.api.chat import wait_pending_cache_writes
 from app.api.dependencies import get_bedrock_client, get_supabase_client
 from app.api.error_handlers import register_error_handlers
 from app.config import get_settings
@@ -29,6 +30,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    await wait_pending_cache_writes()
     logger.info("AI 서버 종료")
 
 
