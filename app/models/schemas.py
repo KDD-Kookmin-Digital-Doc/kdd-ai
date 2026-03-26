@@ -120,3 +120,14 @@ class HealthResponse(BaseModel):
 
     status: Literal["healthy", "unhealthy"]
     dependencies: DependencyStatus
+
+
+# ── Error 관련 ──
+
+
+class ErrorResponse(BaseModel):
+    """통일된 에러 응답 모델. OpenAPI 스키마 문서화용."""
+
+    status: str = Field(default="error", description="항상 'error'")
+    error_code: str = Field(..., description="에러 코드 (BAD_REQUEST, VALIDATION_ERROR 등)")
+    message: str = Field(..., description="사용자 친화적 에러 메시지")
