@@ -29,10 +29,12 @@ _pending_cache_writes: set[asyncio.Task] = set()
 
 async def wait_pending_cache_writes() -> None:
     """진행 중인 캐시 쓰기 태스크를 모두 기다린다. lifespan 종료 시 호출."""
-    if _pending_cache_writes:
-        logger.info("캐시 쓰기 태스크 %d개 완료 대기 중...", len(_pending_cache_writes))
-        await asyncio.gather(*_pending_cache_writes, return_exceptions=True)
-        logger.info("캐시 쓰기 태스크 완료")
+    while _pending_cache_writes:
+        pending = tuple(_pending_cache_writes)
+        logger.info("캐시 쓰기 태스크 %d개 완료 대기 중...", len(pending))
+        await asyncio.gather(*pending, return_exceptions=True)
+        _pending_cache_writes.difference_update(pending)
+    logger.info("캐시 쓰기 태스크 완료")
 
 router = APIRouter()
 
