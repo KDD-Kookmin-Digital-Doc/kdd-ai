@@ -35,7 +35,7 @@ def _format_validation_message(errors: list[dict]) -> str:
     """Pydantic 검증 에러 목록에서 사용자 친화적 메시지를 생성한다."""
     details = []
     for e in errors:
-        loc = " → ".join(str(l) for l in e.get("loc", []))
+        loc = " → ".join(str(loc_part) for loc_part in e.get("loc", []))
         msg = e.get("msg", "")
         details.append(f"{loc}: {msg}")
     return "; ".join(details)

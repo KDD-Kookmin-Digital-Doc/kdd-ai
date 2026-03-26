@@ -35,6 +35,12 @@ async def value_error_endpoint():
     raise ValueError("비즈니스 검증 실패")
 
 
+@_app.post("/test/pydantic-validation-error")
+async def pydantic_validation_error_endpoint():
+    """Pydantic ValidationError를 직접 발생시키는 엔드포인트."""
+    SampleRequest.model_validate({})
+
+
 @_app.post("/test/service-unavailable")
 async def service_unavailable_endpoint():
     raise ServiceUnavailableError(service="Bedrock", detail="timeout")
@@ -125,6 +131,15 @@ class TestValueErrorHandler:
         assert body["status"] == "error"
         assert body["error_code"] == "BAD_REQUEST"
         assert "비즈니스 검증 실패" in body["message"]
+
+    def test_pydantic_validation_error_missing_fields_returns_400(self, client):
+        """PydanticValidationError(missing) → ValueError 핸들러 경유 → 400 BAD_REQUEST."""
+        response = client.post("/test/pydantic-validation-error")
+        assert response.status_code == 400
+
+        body = response.json()
+        assert body["status"] == "error"
+        assert body["error_code"] == "BAD_REQUEST"
 
 
 # ── ServiceUnavailableError 핸들러 테스트 ──
