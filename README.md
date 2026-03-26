@@ -16,12 +16,12 @@
 
 ## 아키텍처
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │                 프론트엔드 / 메인 백엔드 (Spring)          │
 └──────┬──────────┬──────────────┬──────────────┬─────────┘
        │POST      │POST          │DELETE        │POST     │GET
-       │/api/chat │/docs/embed   │/docs/{id}    │/faq     │/health
+       │/api/chat │/api/docs/embed │/api/docs/{id} │/api/faq │/api/health
        ▼          ▼              ▼              ▼         ▼
 ┌─────────────────────────────────────────────────────────┐
 │                  AI Server (FastAPI)                     │
@@ -45,7 +45,7 @@
 
 ## RAG 파이프라인 흐름
 
-```
+```text
 요청 수신 → 입력 검증
     │
     ▼
@@ -116,7 +116,7 @@ is_first_message?
 
 ## 프로젝트 구조
 
-```
+```text
 app/
 ├── main.py                  # FastAPI 앱 엔트리포인트 (라우터, 에러 핸들러, lifespan)
 ├── config.py                # 환경 변수 로드 (Pydantic Settings)
