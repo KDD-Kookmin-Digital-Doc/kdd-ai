@@ -222,6 +222,10 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ## Docker 실행
 
 ```bash
+# 환경 파일 준비
+cp .env.example .env
+# .env에 SUPABASE_URL, SUPABASE_KEY 등 필수값 설정
+
 # 이미지 빌드
 docker build -t kdd-ai .
 
