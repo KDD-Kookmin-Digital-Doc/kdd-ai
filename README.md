@@ -219,6 +219,16 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 서버 시작 시 자동으로 외부 의존성(Supabase, Bedrock) 연결과 임베딩 차원 정합성을 검증합니다. 검증 실패 시 서버가 시작되지 않습니다.
 
+## Docker 실행
+
+```bash
+# 이미지 빌드
+docker build -t kdd-ai .
+
+# 컨테이너 실행
+docker run -d --name kdd-ai -p 8000:8000 --env-file .env kdd-ai
+```
+
 ### API 문서
 
 서버 실행 후 아래 주소에서 OpenAPI 문서를 확인할 수 있습니다:
