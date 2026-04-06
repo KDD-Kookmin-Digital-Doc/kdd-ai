@@ -6,7 +6,7 @@ import asyncio
 import logging
 
 from supabase import Client, create_client
-from supabase.lib.client_options import ClientOptions
+from supabase.lib.client_options import SyncClientOptions as ClientOptions
 
 from app.config import Settings
 from app.models.pipeline import AnswerCache, CacheMatch, SearchResult
