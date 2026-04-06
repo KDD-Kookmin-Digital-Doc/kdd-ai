@@ -226,9 +226,14 @@ class BedrockClient:
         texts: list[str],
         input_type: str = "search_document",
     ) -> list[list[float]]:
-        """Cohere Embed Multilingual v3로 텍스트 배열을 1024차원 벡터로 변환."""
+        """Cohere Embed로 텍스트 배열을 벡터로 변환."""
         body = json.dumps(
-            {"texts": texts, "input_type": input_type, "truncate": "NONE"}
+            {
+                "texts": texts,
+                "input_type": input_type,
+                "truncate": "NONE",
+                "output_dimension": self._settings.EMBEDDING_DIMENSION,
+            }
         )
 
         response = await self._retry_async(
@@ -243,7 +248,10 @@ class BedrockClient:
         try:
             raw = await asyncio.to_thread(stream.read)
             response_body = json.loads(raw)
-            return response_body["embeddings"]
+            embeddings = response_body["embeddings"]
+            if isinstance(embeddings, dict):
+                return embeddings["float"]
+            return embeddings
         finally:
             await asyncio.to_thread(stream.close)
 
