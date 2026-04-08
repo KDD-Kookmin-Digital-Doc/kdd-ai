@@ -134,7 +134,7 @@ class TestHistoryTruncation:
     def test_within_budget_keeps_all(self):
         """예산 내이면 전체 history를 유지한다."""
         history = _make_history(4, content_length=10)
-        # 10자 / 1.5자 ≈ 7토큰 per msg, 4개 = 28토큰
+        # 10자 / 1.5 / 0.8 ≈ 9토큰 per msg, 4개 = 36토큰
         result = truncate_history(history, budget_tokens=100)
 
         assert len(result) == 4
@@ -142,8 +142,8 @@ class TestHistoryTruncation:
     def test_over_budget_removes_oldest(self):
         """예산 초과 시 가장 오래된 메시지부터 제거한다."""
         history = _make_history(4, content_length=15)
-        # 15자 / 1.5 = 10토큰 per msg, 4개 = 40토큰
-        # budget=25 → 2개까지만 수용 가능
+        # 15자 / 1.5 / 0.8 = 13토큰 per msg, 4개 = 52토큰
+        # budget=25 → 1개만 수용 가능
         result = truncate_history(history, budget_tokens=25)
 
         assert len(result) < 4
@@ -153,7 +153,7 @@ class TestHistoryTruncation:
     def test_single_message_over_budget_returns_empty(self):
         """1개만 남았는데도 예산 초과면 빈 리스트를 반환한다."""
         history = [{"role": "user", "content": "가" * 300}]
-        # 300자 / 1.5 = 200토큰, budget=10
+        # 300자 / 1.5 / 0.8 = 250토큰, budget=10
         result = truncate_history(history, budget_tokens=10)
 
         assert result == []
@@ -161,8 +161,8 @@ class TestHistoryTruncation:
     def test_exact_budget_keeps_all(self):
         """예산과 정확히 일치하면 전체를 유지한다."""
         history = [{"role": "user", "content": "가" * 15}]
-        # 15자 / 1.5 = 10토큰
-        result = truncate_history(history, budget_tokens=10)
+        # 15자 / 1.5 / 0.8 = 12.5 → ceil = 13토큰
+        result = truncate_history(history, budget_tokens=13)
 
         assert len(result) == 1
 
@@ -194,10 +194,10 @@ class TestHistoryTruncation:
             assert result[-1] == history[-1]
 
     def test_char_approximation_accuracy(self):
-        """한국어 1토큰 ≈ 1.5자 근사치 검증."""
-        assert _estimate_tokens("가나다") == 2  # 3자 / 1.5 = 2
-        assert _estimate_tokens("가") == 1  # 1자 / 1.5 = 0.67 → ceil = 1
-        assert _estimate_tokens("가나다라마바") == 4  # 6자 / 1.5 = 4
+        """한국어 토큰 근사치 검증 (안전 마진 0.8 적용)."""
+        assert _estimate_tokens("가나다") == 3  # 3자 / 1.5 / 0.8 = 2.5 → ceil = 3
+        assert _estimate_tokens("가") == 1  # 1자 / 1.5 / 0.8 = 0.83 → ceil = 1
+        assert _estimate_tokens("가나다라마바") == 5  # 6자 / 1.5 / 0.8 = 5.0 → ceil = 5
         assert _estimate_tokens("") == 0
 
 

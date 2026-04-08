@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 # 한국어 1토큰 ≈ 1.5자 (history truncation 사전 판단용 근사치)
 _CHARS_PER_TOKEN = 1.5
+# 토큰 추정 시 안전 마진 (실제 토큰 수가 예상보다 많을 수 있으므로 보수적으로 계산)
+_TOKEN_SAFETY_MARGIN = 0.8
 
 _ACADEMIC_SYSTEM_PROMPT = """\
 당신은 대학교 학사규정 안내 챗봇입니다. 아래 제공된 문서 컨텍스트만을 근거로 답변하세요.
@@ -46,7 +48,7 @@ _CHITCHAT_SYSTEM_PROMPT = """\
 
 def _estimate_tokens(text: str) -> int:
     """문자 수 기반 토큰 수 근사치를 반환한다."""
-    return math.ceil(len(text) / _CHARS_PER_TOKEN)
+    return math.ceil(len(text) / _CHARS_PER_TOKEN / _TOKEN_SAFETY_MARGIN)
 
 
 def truncate_history(
@@ -132,7 +134,6 @@ def build_academic_messages(
             "content": [{"text": msg["content"]}],
         })
 
-    question = context.rewritten_question or context.original_question
     messages.append({
         "role": "user",
         "content": [{"text": question}],
