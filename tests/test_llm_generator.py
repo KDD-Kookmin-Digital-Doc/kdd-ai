@@ -134,7 +134,7 @@ class TestHistoryTruncation:
     def test_within_budget_keeps_all(self):
         """예산 내이면 전체 history를 유지한다."""
         history = _make_history(4, content_length=10)
-        # 10자 / 1.5자 ≈ 7토큰 per msg, 4개 = 28토큰
+        # 10자 / 1.5 / 0.8 ≈ 9토큰 per msg, 4개 = 36토큰
         result = truncate_history(history, budget_tokens=100)
 
         assert len(result) == 4
@@ -142,8 +142,8 @@ class TestHistoryTruncation:
     def test_over_budget_removes_oldest(self):
         """예산 초과 시 가장 오래된 메시지부터 제거한다."""
         history = _make_history(4, content_length=15)
-        # 15자 / 1.5 = 10토큰 per msg, 4개 = 40토큰
-        # budget=25 → 2개까지만 수용 가능
+        # 15자 / 1.5 / 0.8 = 13토큰 per msg, 4개 = 52토큰
+        # budget=25 → 1개만 수용 가능
         result = truncate_history(history, budget_tokens=25)
 
         assert len(result) < 4
@@ -153,7 +153,7 @@ class TestHistoryTruncation:
     def test_single_message_over_budget_returns_empty(self):
         """1개만 남았는데도 예산 초과면 빈 리스트를 반환한다."""
         history = [{"role": "user", "content": "가" * 300}]
-        # 300자 / 1.5 = 200토큰, budget=10
+        # 300자 / 1.5 / 0.8 = 250토큰, budget=10
         result = truncate_history(history, budget_tokens=10)
 
         assert result == []
