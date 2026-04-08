@@ -46,6 +46,8 @@ async def _run_pipeline(
     settings: Settings,
 ) -> PipelineContext:
     """RAG 파이프라인을 순차 실행하고 PipelineContext를 반환한다."""
+    logger.info("파이프라인 시작: session=%s, question=%r", request.session_id, request.message)
+
     context = PipelineContext(
         original_question=request.message,
         user_context=request.user_context,

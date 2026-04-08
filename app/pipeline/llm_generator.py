@@ -46,7 +46,7 @@ _CHITCHAT_SYSTEM_PROMPT = """\
 
 def _estimate_tokens(text: str) -> int:
     """문자 수 기반 토큰 수 근사치를 반환한다."""
-    return math.ceil(len(text) / _CHARS_PER_TOKEN)
+    return math.ceil(len(text) / _CHARS_PER_TOKEN / 0.8)
 
 
 def truncate_history(
@@ -132,7 +132,6 @@ def build_academic_messages(
             "content": [{"text": msg["content"]}],
         })
 
-    question = context.rewritten_question or context.original_question
     messages.append({
         "role": "user",
         "content": [{"text": question}],

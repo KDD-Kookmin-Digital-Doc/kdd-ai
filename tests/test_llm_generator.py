@@ -161,8 +161,8 @@ class TestHistoryTruncation:
     def test_exact_budget_keeps_all(self):
         """예산과 정확히 일치하면 전체를 유지한다."""
         history = [{"role": "user", "content": "가" * 15}]
-        # 15자 / 1.5 = 10토큰
-        result = truncate_history(history, budget_tokens=10)
+        # 15자 / 1.5 / 0.8 = 12.5 → ceil = 13토큰
+        result = truncate_history(history, budget_tokens=13)
 
         assert len(result) == 1
 
@@ -194,10 +194,10 @@ class TestHistoryTruncation:
             assert result[-1] == history[-1]
 
     def test_char_approximation_accuracy(self):
-        """한국어 1토큰 ≈ 1.5자 근사치 검증."""
-        assert _estimate_tokens("가나다") == 2  # 3자 / 1.5 = 2
-        assert _estimate_tokens("가") == 1  # 1자 / 1.5 = 0.67 → ceil = 1
-        assert _estimate_tokens("가나다라마바") == 4  # 6자 / 1.5 = 4
+        """한국어 토큰 근사치 검증 (안전 마진 0.8 적용)."""
+        assert _estimate_tokens("가나다") == 3  # 3자 / 1.5 / 0.8 = 2.5 → ceil = 3
+        assert _estimate_tokens("가") == 1  # 1자 / 1.5 / 0.8 = 0.83 → ceil = 1
+        assert _estimate_tokens("가나다라마바") == 5  # 6자 / 1.5 / 0.8 = 5.0 → ceil = 5
         assert _estimate_tokens("") == 0
 
 
