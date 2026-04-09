@@ -89,6 +89,7 @@ async def embed_document(
         "status": "success",
         "doc_id": request.doc_id,
         "embedded_chunk_count": inserted_count,
+        "message": "문서 벡터화 및 적재가 완료되었습니다.",
     }
 
 
