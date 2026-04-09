@@ -295,7 +295,7 @@ class TestNoCacheForChitchatAndFallback:
 
             chunks = []
             async for chunk in _streaming_wrapper(
-                context, bedrock, supabase, settings, http_request
+                context, bedrock, supabase, settings, http_request, is_first_message=True
             ):
                 chunks.append(chunk)
 
@@ -322,7 +322,7 @@ class TestNoCacheForChitchatAndFallback:
             mock_sse.return_value = _mock_stream()
 
             async for _ in _streaming_wrapper(
-                context, bedrock, supabase, settings, http_request
+                context, bedrock, supabase, settings, http_request, is_first_message=True
             ):
                 pass
 
@@ -350,7 +350,7 @@ class TestNoCacheForChitchatAndFallback:
             mock_sse.return_value = _mock_stream()
 
             async for _ in _streaming_wrapper(
-                context, bedrock, supabase, settings, http_request
+                context, bedrock, supabase, settings, http_request, is_first_message=True
             ):
                 pass
 
@@ -506,7 +506,7 @@ class TestClientDisconnect:
 
             chunks = []
             async for chunk in _streaming_wrapper(
-                context, bedrock, supabase, settings, http_request
+                context, bedrock, supabase, settings, http_request, is_first_message=False
             ):
                 chunks.append(chunk)
 

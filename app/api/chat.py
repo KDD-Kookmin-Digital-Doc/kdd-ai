@@ -86,12 +86,14 @@ async def _streaming_wrapper(
     supabase: SupabaseVectorClient,
     settings: Settings,
     http_request: Request,
+    is_first_message: bool,
 ) -> AsyncGenerator[str, None]:
     """SSE 스트리밍을 래핑하여 답변 버퍼링 + 캐시 저장 + disconnect 감지를 처리한다."""
     answer_buffer: list[str] = []
     stream_completed = False
     should_cache = (
-        not context.cache_hit
+        is_first_message
+        and not context.cache_hit
         and context.intent == "academic"
         and context.search_results
     )
@@ -177,7 +179,7 @@ async def chat(
     context = await _run_pipeline(request, bedrock, supabase, settings)
 
     return StreamingResponse(
-        _streaming_wrapper(context, bedrock, supabase, settings, http_request),
+        _streaming_wrapper(context, bedrock, supabase, settings, http_request, request.is_first_message),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
