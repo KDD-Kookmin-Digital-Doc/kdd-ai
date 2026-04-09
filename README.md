@@ -9,7 +9,7 @@
 | 런타임 | Python 3.11+, FastAPI, uvicorn |
 | LLM (답변 생성) | AWS Bedrock — Claude 3.5 Sonnet |
 | LLM (재작성/의도분류/잡담) | AWS Bedrock — Claude 3 Haiku |
-| 임베딩 | AWS Bedrock — Cohere Embed Multilingual v3 (1024차원) |
+| 임베딩 | AWS Bedrock — Cohere Embed Multilingual v4 (1024차원) |
 | 벡터 DB | Supabase (PostgreSQL + pgvector) |
 | 스트리밍 | SSE (Server-Sent Events) |
 | 테스트 | pytest, pytest-asyncio, Hypothesis (속성 기반 테스트) |
@@ -20,8 +20,8 @@
 ┌─────────────────────────────────────────────────────────┐
 │                 프론트엔드 / 메인 백엔드 (Spring)          │
 └──────┬──────────┬──────────────┬──────────────┬─────────┘
-       │POST      │POST          │DELETE        │POST     │GET
-       │/api/chat │/api/docs/embed │/api/docs/{id} │/api/faq │/api/health
+       │POST      │POST               │DELETE             │POST         │GET
+       │/api/chat │/api/documents/embed │/api/documents/{id} │/api/faq/analyze │/api/health
        ▼          ▼              ▼              ▼         ▼
 ┌─────────────────────────────────────────────────────────┐
 │                  AI Server (FastAPI)                     │
@@ -38,7 +38,7 @@
 ┌───────────┐ ┌──────────────┐ ┌──────────────────────┐
 │ Bedrock   │ │ Bedrock      │ │ Supabase Vector DB   │
 │ Claude    │ │ Cohere Embed │ │ (pgvector)           │
-│ Haiku/    │ │ v3 (1024d)   │ │                      │
+│ Haiku/    │ │ v4 (1024d)   │ │                      │
 │ Sonnet    │ │              │ │                      │
 └───────────┘ └──────────────┘ └──────────────────────┘
 ```
@@ -182,10 +182,10 @@ cp .env.example .env
 |---|---|---|
 | `SUPABASE_URL` | (필수) | Supabase 프로젝트 URL |
 | `SUPABASE_KEY` | (필수) | Supabase service role key |
-| `AWS_REGION` | `us-east-1` | AWS 리전 |
-| `BEDROCK_LIGHT_MODEL_ID` | `anthropic.claude-3-haiku-20240307-v1:0` | 질문 재작성, 의도 분류, 잡담용 LLM |
-| `BEDROCK_ANSWER_MODEL_ID` | `anthropic.claude-3-5-sonnet-20241022-v2:0` | 학사규정 답변 생성용 LLM |
-| `BEDROCK_EMBEDDING_MODEL_ID` | `cohere.embed-multilingual-v3` | 임베딩 모델 |
+| `AWS_REGION` | `ap-northeast-2` | AWS 리전 |
+| `BEDROCK_LIGHT_MODEL_ID` | `apac.anthropic.claude-3-haiku-20240307-v1:0` | 질문 재작성, 의도 분류, 잡담용 LLM |
+| `BEDROCK_ANSWER_MODEL_ID` | `apac.anthropic.claude-3-5-sonnet-20241022-v2:0` | 학사규정 답변 생성용 LLM |
+| `BEDROCK_EMBEDDING_MODEL_ID` | `global.cohere.embed-v4:0` | 임베딩 모델 |
 | `EMBEDDING_DIMENSION` | `1024` | 임베딩 벡터 차원 |
 | `LLM_CONTEXT_WINDOW` | `200000` | LLM 컨텍스트 윈도우 (토큰) |
 | `LLM_MAX_TOKENS` | `1024` | LLM 최대 출력 토큰 |
