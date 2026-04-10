@@ -17,6 +17,7 @@ from app.models.pipeline import (
     TokenUsage,
 )
 from app.streaming.sse import (
+    _buffer_by_word,
     _determine_confidence,
     _format_sse_event,
     stream_sse_response,
@@ -93,8 +94,8 @@ class TestSSEStreamStructure:
     @patch("app.streaming.sse.generate_response")
     async def test_scenario_a_normal(self, mock_gen):
         """시나리오 A: meta(document) → text* → done."""
-        mock_gen.return_value = _mock_generate_response(["답변", "입니다"])("", "", "")
-        mock_gen.side_effect = _mock_generate_response(["답변", "입니다"])
+        mock_gen.return_value = _mock_generate_response(["답변 ", "입니다"])("", "", "")
+        mock_gen.side_effect = _mock_generate_response(["답변 ", "입니다"])
 
         settings = _create_settings()
         bedrock = _create_bedrock()
@@ -113,7 +114,10 @@ class TestSSEStreamStructure:
         assert chunks[0]["subtype"] == "document"
         assert "confidence" in chunks[0]
         assert "sources" in chunks[0]
-        assert all(c["type"] == "text" for c in chunks[1:-1])
+        text_chunks = [c for c in chunks[1:-1] if c["type"] == "text"]
+        assert len(text_chunks) >= 1
+        combined = "".join(c["content"] for c in text_chunks)
+        assert combined == "답변 입니다"
         assert chunks[-1]["type"] == "done"
         assert "usage" in chunks[-1]
 
@@ -166,7 +170,7 @@ class TestSSEStreamStructure:
     @patch("app.streaming.sse.generate_response")
     async def test_scenario_d_chitchat(self, mock_gen):
         """시나리오 D: meta(chitchat) → text* → done."""
-        mock_gen.side_effect = _mock_generate_response(["안녕", "하세요"])
+        mock_gen.side_effect = _mock_generate_response(["안녕 ", "하세요"])
 
         settings = _create_settings()
         bedrock = _create_bedrock()
@@ -182,7 +186,10 @@ class TestSSEStreamStructure:
         assert chunks[0]["type"] == "meta"
         assert chunks[0]["subtype"] == "chitchat"
         assert chunks[0]["intent"] == "chitchat"
-        assert all(c["type"] == "text" for c in chunks[1:-1])
+        text_chunks = [c for c in chunks[1:-1] if c["type"] == "text"]
+        assert len(text_chunks) >= 1
+        combined = "".join(c["content"] for c in text_chunks)
+        assert combined == "안녕 하세요"
         assert chunks[-1]["type"] == "done"
 
     @patch("app.streaming.sse.generate_response")
@@ -283,7 +290,7 @@ class TestSourceInfoPreservation:
     @patch("app.streaming.sse.generate_response")
     async def test_normal_sources_preserved(self, mock_gen):
         """정상 응답 시 sources에 doc_id, doc_name, page가 보존된다."""
-        mock_gen.side_effect = _mock_generate_response(["답변"])
+        mock_gen.side_effect = _mock_generate_response(["답변 ", "입니다"])
 
         settings = _create_settings()
         bedrock = _create_bedrock()
@@ -386,6 +393,50 @@ class TestDetermineConfidence:
             settings = Settings(_env_file=None)
             results = [_make_search_result(similarity=0.9)]
             assert _determine_confidence(results, settings) == "medium"
+
+
+# ── 토큰 버퍼링 테스트 ──
+
+
+class TestBufferByWord:
+    """_buffer_by_word: 공백 기준 단어 단위 버퍼링 검증."""
+
+    async def _collect(self, tokens: list[str]) -> list[str]:
+        async def _gen():
+            for t in tokens:
+                yield t
+        return [chunk async for chunk in _buffer_by_word(_gen())]
+
+    async def test_single_word_no_space(self):
+        """공백 없이 끝나면 전체를 한 번에 flush."""
+        result = await self._collect(["안", "녕", "하", "세", "요"])
+        assert result == ["안녕하세요"]
+
+    async def test_words_with_spaces(self):
+        """공백 기준으로 분리하여 전송."""
+        result = await self._collect(["학", "사", " ", "규", "정"])
+        assert result == ["학사 ", "규정"]
+
+    async def test_token_contains_space(self):
+        """토큰 자체에 공백이 포함된 경우."""
+        result = await self._collect(["안녕 하세요"])
+        assert result == ["안녕 ", "하세요"]
+
+    async def test_multiple_spaces(self):
+        """연속 공백 처리."""
+        result = await self._collect(["a ", "b ", "c"])
+        assert result == ["a ", "b ", "c"]
+
+    async def test_empty_stream(self):
+        """빈 스트림."""
+        result = await self._collect([])
+        assert result == []
+
+    async def test_preserves_full_text(self):
+        """버퍼링 후 합친 결과가 원본과 동일."""
+        tokens = ["학", "사", "규", "정", " ", "관", "련", " ", "질", "문"]
+        result = await self._collect(tokens)
+        assert "".join(result) == "".join(tokens)
 
 
 # ── SSE 포맷 테스트 ──

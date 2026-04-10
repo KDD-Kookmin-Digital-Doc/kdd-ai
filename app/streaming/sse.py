@@ -14,6 +14,22 @@ from app.pipeline.llm_generator import generate_response
 logger = logging.getLogger(__name__)
 
 
+async def _buffer_by_word(
+    token_stream: AsyncGenerator[str, None],
+) -> AsyncGenerator[str, None]:
+    """토큰 스트림을 공백 기준으로 묶어서 단어 단위로 yield한다."""
+    buf = ""
+    async for token in token_stream:
+        buf += token
+        # 버퍼에 공백이 포함되면 마지막 공백까지 flush
+        last_space = buf.rfind(" ")
+        if last_space != -1:
+            yield buf[: last_space + 1]
+            buf = buf[last_space + 1 :]
+    if buf:
+        yield buf
+
+
 def _format_sse_event(data: dict) -> str:
     """SSE 포맷 문자열을 생성한다."""
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -86,10 +102,12 @@ async def stream_sse_response(
                 "subtype": "chitchat",
                 "intent": "chitchat",
             })
-            async for token in generate_response(context, bedrock, settings):
+            async for chunk in _buffer_by_word(
+                generate_response(context, bedrock, settings)
+            ):
                 yield _format_sse_event({
                     "type": "text",
-                    "content": token,
+                    "content": chunk,
                 })
             yield _format_sse_event({
                 "type": "done",
@@ -130,10 +148,12 @@ async def stream_sse_response(
             "confidence": confidence,
             "sources": sources,
         })
-        async for token in generate_response(context, bedrock, settings):
+        async for chunk in _buffer_by_word(
+            generate_response(context, bedrock, settings)
+        ):
             yield _format_sse_event({
                 "type": "text",
-                "content": token,
+                "content": chunk,
             })
         yield _format_sse_event({
             "type": "done",
