@@ -62,6 +62,7 @@ class DocumentMetadata(BaseModel):
 class DocumentChunk(BaseModel):
     """문서 청크."""
 
+    chunk_id: int = Field(..., ge=1)
     content: str = Field(..., min_length=1)
     page: int = Field(..., ge=1)
 

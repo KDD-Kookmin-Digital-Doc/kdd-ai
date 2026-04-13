@@ -19,7 +19,7 @@ class TokenUsage:
 class SearchResult:
     """벡터 검색 결과."""
 
-    id: int
+    chunk_id: int
     doc_id: str
     content: str
     metadata: dict
@@ -31,6 +31,7 @@ class SourceDoc:
     """출처 정보."""
 
     doc_id: str
+    chunk_id: int
     doc_name: str
     page: int
 

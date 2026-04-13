@@ -44,9 +44,10 @@ def _make_search_result(
     doc_id: str = "doc-1",
     doc_name: str = "학사요람.pdf",
     page: int = 10,
+    chunk_id: int = 1,
 ) -> SearchResult:
     return SearchResult(
-        id=1,
+        chunk_id=chunk_id,
         doc_id=doc_id,
         content="제1조 내용",
         metadata={"doc_name": doc_name, "page": page},
@@ -58,8 +59,9 @@ def _make_source_doc(
     doc_id: str = "doc-1",
     doc_name: str = "학사요람.pdf",
     page: int = 10,
+    chunk_id: int = 1,
 ) -> SourceDoc:
-    return SourceDoc(doc_id=doc_id, doc_name=doc_name, page=page)
+    return SourceDoc(doc_id=doc_id, chunk_id=chunk_id, doc_name=doc_name, page=page)
 
 
 async def _collect_chunks(async_gen) -> list[dict]:
@@ -273,7 +275,7 @@ class TestSourceInfoPreservation:
             original_question="q",
             cache_hit=True,
             cached_answer="a",
-            cached_sources=[SourceDoc(doc_id=doc_id, doc_name=doc_name, page=page)],
+            cached_sources=[SourceDoc(doc_id=doc_id, chunk_id=1, doc_name=doc_name, page=page)],
         )
 
         chunks = await _collect_chunks(
@@ -312,6 +314,7 @@ class TestSourceInfoPreservation:
         meta = chunks[0]
         src = meta["sources"][0]
         assert src["doc_id"] == "doc-99"
+        assert src["chunk_id"] == 1
         assert src["doc_name"] == "학칙.pdf"
         assert src["page"] == 42
 
@@ -324,9 +327,9 @@ class TestSourceInfoPreservation:
             cache_hit=True,
             cached_answer="a",
             cached_sources=[
-                SourceDoc(doc_id="d1", doc_name="a.pdf", page=1),
-                SourceDoc(doc_id="d2", doc_name="b.pdf", page=2),
-                SourceDoc(doc_id="d3", doc_name="c.pdf", page=3),
+                SourceDoc(doc_id="d1", chunk_id=101, doc_name="a.pdf", page=1),
+                SourceDoc(doc_id="d2", chunk_id=102, doc_name="b.pdf", page=2),
+                SourceDoc(doc_id="d3", chunk_id=103, doc_name="c.pdf", page=3),
             ],
         )
 
@@ -335,6 +338,7 @@ class TestSourceInfoPreservation:
         )
 
         assert len(chunks[0]["sources"]) == 3
+        assert [s["chunk_id"] for s in chunks[0]["sources"]] == [101, 102, 103]
 
 
 # ── confidence 단위 테스트 ──

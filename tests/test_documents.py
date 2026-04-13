@@ -67,7 +67,7 @@ def _make_embed_request(
             enforcement_date="2026-03-01",
         ),
         chunks=[
-            DocumentChunk(content=f"제{i+1}조 내용", page=i + 1)
+            DocumentChunk(chunk_id=i + 1, content=f"제{i+1}조 내용", page=i + 1)
             for i in range(chunk_count)
         ],
     )
@@ -159,12 +159,13 @@ class TestEmbedRoundtrip:
                 category="학사",
                 enforcement_date="2026-01-01",
             ),
-            chunks=[DocumentChunk(content=content, page=page)],
+            chunks=[DocumentChunk(chunk_id=77, content=content, page=page)],
         )
 
         await embed_document(request, settings, bedrock, supabase)
 
         chunks_arg = supabase.insert_document_chunks.call_args[0][1]
+        assert chunks_arg[0]["chunk_id"] == 77
         assert chunks_arg[0]["content"] == content
         assert chunks_arg[0]["metadata"]["page"] == page
 
