@@ -14,20 +14,31 @@ from app.pipeline.llm_generator import generate_response
 logger = logging.getLogger(__name__)
 
 
+_WHITESPACE_CHARS = (" ", "\n", "\t", "\r")
+
+
 async def _buffer_by_word(
     token_stream: AsyncGenerator[str, None],
 ) -> AsyncGenerator[str, None]:
-    """토큰 스트림을 공백 기준으로 묶어서 단어 단위로 yield한다."""
+    """토큰 스트림을 whitespace 기준으로 묶어서 단어 단위로 yield한다.
+
+    upstream이 예외로 종료되어도 잔여 버퍼를 먼저 flush한 뒤 예외를 재전파한다.
+    """
     buf = ""
-    async for token in token_stream:
-        buf += token
-        # 버퍼에 공백이 포함되면 마지막 공백까지 flush
-        last_space = buf.rfind(" ")
-        if last_space != -1:
-            yield buf[: last_space + 1]
-            buf = buf[last_space + 1 :]
-    if buf:
-        yield buf
+    try:
+        async for token in token_stream:
+            buf += token
+            # 버퍼의 마지막 whitespace까지 flush (공백/개행/탭 모두 경계로 인식)
+            last_ws = max(buf.rfind(c) for c in _WHITESPACE_CHARS)
+            if last_ws != -1:
+                yield buf[: last_ws + 1]
+                buf = buf[last_ws + 1 :]
+        if buf:
+            yield buf
+    except Exception:
+        if buf:
+            yield buf
+        raise
 
 
 def _format_sse_event(data: dict) -> str:

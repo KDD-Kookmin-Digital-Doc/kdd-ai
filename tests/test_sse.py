@@ -438,6 +438,34 @@ class TestBufferByWord:
         result = await self._collect(tokens)
         assert "".join(result) == "".join(tokens)
 
+    async def test_newline_boundary(self):
+        """개행 문자도 단어 경계로 처리한다."""
+        result = await self._collect(["a", "b\n", "c", "d"])
+        assert result == ["ab\n", "cd"]
+        assert "".join(result) == "ab\ncd"
+
+    async def test_tab_boundary(self):
+        """탭 문자도 단어 경계로 처리한다."""
+        result = await self._collect(["a", "b\t", "c"])
+        assert result == ["ab\t", "c"]
+
+    async def test_flushes_on_upstream_exception(self):
+        """upstream이 예외로 종료되면 잔여 버퍼를 flush한 뒤 예외를 재전파한다."""
+        import pytest
+
+        async def _failing_gen():
+            yield "부분"
+            yield "답변"
+            raise RuntimeError("upstream 장애")
+
+        collected: list[str] = []
+        with pytest.raises(RuntimeError, match="upstream 장애"):
+            async for chunk in _buffer_by_word(_failing_gen()):
+                collected.append(chunk)
+
+        # 공백이 없으므로 전체 버퍼가 예외 직전에 flush되어야 한다
+        assert "".join(collected) == "부분답변"
+
 
 # ── SSE 포맷 테스트 ──
 
