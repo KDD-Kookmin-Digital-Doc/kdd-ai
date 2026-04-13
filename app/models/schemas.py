@@ -84,6 +84,23 @@ class EmbedRequest(BaseModel):
     def doc_id_not_blank(cls, v: str) -> str:
         return _check_not_blank(v, "doc_id")
 
+    @field_validator("chunks")
+    @classmethod
+    def chunk_ids_must_be_unique(
+        cls, v: list[DocumentChunk]
+    ) -> list[DocumentChunk]:
+        seen: set[int] = set()
+        dupes: set[int] = set()
+        for c in v:
+            if c.chunk_id in seen:
+                dupes.add(c.chunk_id)
+            seen.add(c.chunk_id)
+        if dupes:
+            raise ValueError(
+                f"중복된 chunk_id가 있습니다: {sorted(dupes)}"
+            )
+        return v
+
 
 # ── FAQ 분석 관련 ──
 

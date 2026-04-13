@@ -172,6 +172,27 @@ class TestEmbedRequest:
         with pytest.raises(ValidationError):
             DocumentChunk(chunk_id=1, content="내용", page=0)
 
+    def test_invalid_chunk_id(self):
+        with pytest.raises(ValidationError):
+            DocumentChunk(chunk_id=0, content="내용", page=1)
+        with pytest.raises(ValidationError):
+            DocumentChunk(chunk_id=-1, content="내용", page=1)
+
+    def test_duplicate_chunk_ids_rejected(self):
+        with pytest.raises(ValidationError):
+            EmbedRequest(
+                doc_id="doc-1",
+                metadata=DocumentMetadata(
+                    doc_name="test.pdf",
+                    category="학사",
+                    enforcement_date="2026-03-01",
+                ),
+                chunks=[
+                    DocumentChunk(chunk_id=1, content="내용1", page=1),
+                    DocumentChunk(chunk_id=1, content="내용2", page=2),
+                ],
+            )
+
     def test_blank_doc_id_rejected(self):
         with pytest.raises(ValidationError):
             EmbedRequest(
