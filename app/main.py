@@ -63,17 +63,20 @@ API_DESCRIPTION = """
 - **Health**: 서버 및 외부 의존성 상태 체크
 
 ### 에러 응답 스키마
-모든 실패 응답은 아래 스키마를 따릅니다.
+`/api/health` 를 제외한 모든 엔드포인트의 실패 응답은 아래 공통 스키마를 따릅니다.
+(`/api/health` 는 503 상황에서도 `ErrorResponse` 가 아닌 동일한 `HealthResponse`
+본문을 반환합니다.)
 
 ```json
 { "status": "error", "error_code": "VALIDATION_ERROR", "message": "..." }
 ```
 
-| HTTP | error_code 예시                            | 설명                       |
-|------|--------------------------------------------|----------------------------|
-| 400  | `BAD_REQUEST`, `INSUFFICIENT_DATA`         | 필수 파라미터 누락 등      |
-| 422  | `VALIDATION_ERROR`                         | 타입·제약조건 위반         |
-| 503  | `UPSTREAM_UNAVAILABLE`                     | Bedrock/Vector DB 장애     |
+| HTTP | error_code                            | 설명                       |
+|------|---------------------------------------|----------------------------|
+| 400  | `BAD_REQUEST`, `INSUFFICIENT_DATA`    | 필수 파라미터 누락 등      |
+| 422  | `VALIDATION_ERROR`                    | 타입·제약조건 위반         |
+| 500  | `INTERNAL_ERROR`                      | 예상치 못한 서버 내부 오류 |
+| 503  | `SERVICE_UNAVAILABLE`                 | Bedrock/Vector DB 장애     |
 """
 
 
