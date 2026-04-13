@@ -3,7 +3,7 @@
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def _check_not_blank(v: str, field_name: str) -> str:
@@ -19,8 +19,15 @@ def _check_not_blank(v: str, field_name: str) -> str:
 class HistoryMessage(BaseModel):
     """대화 내역 메시지."""
 
-    role: Literal["user", "assistant"]
-    content: str = Field(..., min_length=1)
+    role: Literal["user", "assistant"] = Field(
+        ..., description="메시지 발화자. `user` 또는 `assistant`.", examples=["user"]
+    )
+    content: str = Field(
+        ...,
+        min_length=1,
+        description="메시지 본문 (공백만 있는 문자열 불가).",
+        examples=["휴학 신청은 어떻게 하나요?"],
+    )
 
     @field_validator("content")
     @classmethod
@@ -31,11 +38,49 @@ class HistoryMessage(BaseModel):
 class ChatRequest(BaseModel):
     """POST /api/chat 요청 모델."""
 
-    message: str = Field(..., min_length=1, max_length=2000)
-    session_id: str = Field(..., min_length=1)
-    user_context: str = Field(..., min_length=1, max_length=500)
-    is_first_message: bool
-    history: list[HistoryMessage] = Field(default_factory=list)
+    message: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+        description="사용자 질문. 1~2000자, 공백만 있는 문자열 불가.",
+        examples=["휴학 신청은 어떻게 하나요?"],
+    )
+    session_id: str = Field(
+        ...,
+        min_length=1,
+        description="대화 세션 식별자. 클라이언트에서 발급한 UUID 권장.",
+        examples=["sess-2026-04-13-abc123"],
+    )
+    user_context: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="사용자 상황 정보 (학부/학과/학년 등). 답변 톤·범위 판단에 사용.",
+        examples=["컴퓨터공학과 3학년 학부생"],
+    )
+    is_first_message: bool = Field(
+        ...,
+        description="세션 내 첫 메시지 여부. `true` 인 경우에만 시맨틱 캐시 조회/저장이 수행됨.",
+        examples=[True],
+    )
+    history: list[HistoryMessage] = Field(
+        default_factory=list,
+        description="직전 대화 히스토리. 질문 재작성(문맥화) 단계에서 참조됨.",
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "message": "휴학은 몇 학기까지 가능한가요?",
+                    "session_id": "sess-2026-04-13-abc123",
+                    "user_context": "컴퓨터공학과 3학년 학부생",
+                    "is_first_message": True,
+                    "history": [],
+                }
+            ]
+        }
+    )
 
     @field_validator("message", "session_id", "user_context")
     @classmethod
@@ -49,9 +94,15 @@ class ChatRequest(BaseModel):
 class DocumentMetadata(BaseModel):
     """문서 메타데이터."""
 
-    doc_name: str = Field(..., min_length=1)
-    category: str = Field(..., min_length=1)
-    enforcement_date: date
+    doc_name: str = Field(
+        ..., min_length=1, description="문서 이름.", examples=["학사규정_2024"]
+    )
+    category: str = Field(
+        ..., min_length=1, description="문서 카테고리.", examples=["학사"]
+    )
+    enforcement_date: date = Field(
+        ..., description="해당 규정 시행일 (ISO-8601).", examples=["2024-03-01"]
+    )
 
     @field_validator("doc_name", "category")
     @classmethod
@@ -62,9 +113,21 @@ class DocumentMetadata(BaseModel):
 class DocumentChunk(BaseModel):
     """문서 청크."""
 
-    chunk_id: int = Field(..., ge=1)
-    content: str = Field(..., min_length=1)
-    page: int = Field(..., ge=1)
+    chunk_id: int = Field(
+        ...,
+        ge=1,
+        description="문서 내 청크 고유 번호. 1부터 시작하며 동일 doc_id 내에서 유일해야 함.",
+        examples=[1],
+    )
+    content: str = Field(
+        ...,
+        min_length=1,
+        description="청크 본문 텍스트.",
+        examples=["제1조(목적) 이 규정은 학사운영에 관한 사항을 정함을 목적으로 한다."],
+    )
+    page: int = Field(
+        ..., ge=1, description="원본 문서 내 페이지 번호.", examples=[1]
+    )
 
     @field_validator("content")
     @classmethod
@@ -75,9 +138,45 @@ class DocumentChunk(BaseModel):
 class EmbedRequest(BaseModel):
     """POST /api/documents/embed 요청 모델."""
 
-    doc_id: str = Field(..., min_length=1)
+    doc_id: str = Field(
+        ...,
+        min_length=1,
+        description="문서 식별자. 동일 값 재적재 시 기존 청크는 삭제 후 재삽입됨.",
+        examples=["academic-2024"],
+    )
     metadata: DocumentMetadata
-    chunks: list[DocumentChunk] = Field(..., min_length=1)
+    chunks: list[DocumentChunk] = Field(
+        ...,
+        min_length=1,
+        description="적재할 청크 목록. 최소 1개 이상, chunk_id 는 유일해야 함.",
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "doc_id": "academic-2024",
+                    "metadata": {
+                        "doc_name": "학사규정_2024",
+                        "category": "학사",
+                        "enforcement_date": "2024-03-01",
+                    },
+                    "chunks": [
+                        {
+                            "chunk_id": 1,
+                            "content": "제1조(목적) 이 규정은 학사운영에 관한 사항을 정함을 목적으로 한다.",
+                            "page": 1,
+                        },
+                        {
+                            "chunk_id": 2,
+                            "content": "제2조(적용범위) 이 규정은 본교 학부생에게 적용한다.",
+                            "page": 1,
+                        },
+                    ],
+                }
+            ]
+        }
+    )
 
     @field_validator("doc_id")
     @classmethod
@@ -108,9 +207,39 @@ class EmbedRequest(BaseModel):
 class FAQAnalyzeRequest(BaseModel):
     """POST /api/faq/analyze 요청 모델."""
 
-    questions: list[str] = Field(..., min_length=1)
-    top_k: int = Field(default=5, ge=1, le=50)
-    min_cluster_size: int = Field(default=2, ge=2)
+    questions: list[str] = Field(
+        ...,
+        min_length=1,
+        description="분석 대상 질문 목록. 최소 1개 이상, 각 질문은 공백만으로 이뤄질 수 없음.",
+    )
+    top_k: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        description="반환할 상위 FAQ 후보 개수. 1~50.",
+    )
+    min_cluster_size: int = Field(
+        default=2,
+        ge=2,
+        description="FAQ 클러스터로 인정할 최소 질문 수. 2 이상.",
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "questions": [
+                        "휴학 신청 방법 알려주세요",
+                        "휴학은 어떻게 하나요",
+                        "장학금 신청 기한이 언제인가요",
+                        "장학금 언제까지 신청해야 하죠",
+                    ],
+                    "top_k": 5,
+                    "min_cluster_size": 2,
+                }
+            ]
+        }
+    )
 
     @field_validator("questions")
     @classmethod

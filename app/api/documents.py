@@ -17,11 +17,51 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/api/documents/embed", responses={
-    400: {"model": ErrorResponse, "description": "필수 파라미터 누락"},
-    422: {"model": ErrorResponse, "description": "타입 불일치 / 제약조건 위반"},
-    503: {"model": ErrorResponse, "description": "외부 서비스 장애"},
-})
+@router.post(
+    "/api/documents/embed",
+    tags=["Documents"],
+    summary="문서 청크 벡터화 및 적재",
+    operation_id="embed_document",
+    description=(
+        "문서 청크 목록을 받아 임베딩을 생성하고 벡터 DB에 적재합니다.\n\n"
+        "- 동일 `doc_id` 재적재 시 **기존 청크 삭제 + 관련 캐시 무효화 후 재삽입** (last-write-wins)\n"
+        "- 일부 청크 임베딩 실패 시 `status=partial_failure` 로 응답하며, 성공분만 적재됩니다.\n"
+        "- 모든 청크 실패 시 기존 데이터는 유지됩니다 (안전한 롤백)."
+    ),
+    responses={
+        200: {
+            "description": "적재 성공 또는 부분 실패",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "success": {
+                            "summary": "전체 성공",
+                            "value": {
+                                "status": "success",
+                                "doc_id": "academic-2024",
+                                "embedded_chunk_count": 12,
+                                "message": "문서 벡터화 및 적재가 완료되었습니다.",
+                            },
+                        },
+                        "partial_failure": {
+                            "summary": "부분 실패",
+                            "value": {
+                                "status": "partial_failure",
+                                "doc_id": "academic-2024",
+                                "embedded_chunk_count": 10,
+                                "failed_chunks": [{"index": 5, "error": "embedding_failed"}],
+                                "message": "일부 청크의 벡터화에 실패했습니다.",
+                            },
+                        },
+                    }
+                }
+            },
+        },
+        400: {"model": ErrorResponse, "description": "필수 파라미터 누락"},
+        422: {"model": ErrorResponse, "description": "타입 불일치 / 제약조건 위반"},
+        503: {"model": ErrorResponse, "description": "외부 서비스 장애"},
+    },
+)
 async def embed_document(
     request: EmbedRequest,
     settings: Settings = Depends(get_settings),
@@ -94,9 +134,34 @@ async def embed_document(
     }
 
 
-@router.delete("/api/documents/{doc_id}", responses={
-    503: {"model": ErrorResponse, "description": "외부 서비스 장애"},
-})
+@router.delete(
+    "/api/documents/{doc_id}",
+    tags=["Documents"],
+    summary="문서 삭제 및 캐시 무효화",
+    operation_id="delete_document",
+    description=(
+        "지정 문서(`doc_id`)의 벡터 청크를 전부 삭제하고 관련 답변 캐시를 무효화합니다.\n\n"
+        "- **멱등성 보장**: 존재하지 않는 `doc_id` 에 대해서도 `deleted_chunk_count=0` 으로 200 응답\n"
+        "- 재색인 전 clean-up 용도로 사용 가능"
+    ),
+    responses={
+        200: {
+            "description": "삭제 성공 (멱등)",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "success",
+                        "doc_id": "academic-2024",
+                        "deleted_chunk_count": 12,
+                        "invalidated_cache_count": 3,
+                        "message": "해당 문서의 벡터 데이터 및 관련 캐시가 정상적으로 삭제되었습니다.",
+                    }
+                }
+            },
+        },
+        503: {"model": ErrorResponse, "description": "외부 서비스 장애"},
+    },
+)
 async def delete_document(
     doc_id: str,
     supabase: SupabaseVectorClient = Depends(get_supabase_client),

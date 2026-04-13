@@ -163,11 +163,53 @@ async def _save_answer_cache(
         logger.warning("답변 캐시 저장 실패 — 사용자 응답에 영향 없음", exc_info=True)
 
 
-@router.post("/api/chat", responses={
-    400: {"model": ErrorResponse, "description": "필수 파라미터 누락"},
-    422: {"model": ErrorResponse, "description": "타입 불일치 / 제약조건 위반"},
-    503: {"model": ErrorResponse, "description": "외부 서비스 장애"},
-})
+@router.post(
+    "/api/chat",
+    tags=["Chat"],
+    summary="RAG 챗봇 대화 (SSE 스트리밍)",
+    operation_id="chat_stream",
+    description=(
+        "학사규정 RAG 파이프라인을 실행하고 **SSE(Server-Sent Events)** 스트림으로 답변을 반환합니다.\n\n"
+        "### 파이프라인 단계\n"
+        "1. 시맨틱 캐시 조회 (`is_first_message=true`인 경우)\n"
+        "2. 질문 재작성 (히스토리 기반 문맥화)\n"
+        "3. 의도 분류 (`academic` / `chitchat`)\n"
+        "4. 벡터 검색 (academic 인 경우)\n"
+        "5. LLM 스트리밍 답변 생성\n\n"
+        "### SSE 이벤트 포맷\n"
+        "응답은 `text/event-stream` 이며 각 이벤트는 `data: <JSON>\\n\\n` 형태입니다.\n"
+        "```\n"
+        "data: {\"type\": \"text\", \"content\": \"안녕\"}\n\n"
+        "data: {\"type\": \"source\", \"sources\": [...]}\n\n"
+        "data: {\"type\": \"done\"}\n\n"
+        "```\n\n"
+        "### 테스트 (curl)\n"
+        "```bash\n"
+        "curl -N -X POST http://localhost:8000/api/chat \\\n"
+        "  -H 'Content-Type: application/json' \\\n"
+        '  -d \'{"message":"휴학 신청 방법","session_id":"s1","user_context":"학부생","is_first_message":true,"history":[]}\'\n'
+        "```\n\n"
+        "> ⚠️ Swagger UI 의 *Try it out* 은 SSE 스트림을 온전히 표시하지 못할 수 있습니다. curl 또는 전용 클라이언트 사용을 권장합니다."
+    ),
+    responses={
+        200: {
+            "description": "SSE 스트림 응답 (text/event-stream)",
+            "content": {
+                "text/event-stream": {
+                    "example": (
+                        'data: {"type": "text", "content": "휴학은 "}\n\n'
+                        'data: {"type": "text", "content": "신청서를 제출하면 됩니다."}\n\n'
+                        'data: {"type": "source", "sources": [{"doc_id": "academic-2024", "page": 12}]}\n\n'
+                        'data: {"type": "done"}\n\n'
+                    )
+                }
+            },
+        },
+        400: {"model": ErrorResponse, "description": "필수 파라미터 누락"},
+        422: {"model": ErrorResponse, "description": "타입 불일치 / 제약조건 위반"},
+        503: {"model": ErrorResponse, "description": "외부 서비스 장애"},
+    },
+)
 async def chat(
     request: ChatRequest,
     http_request: Request,
