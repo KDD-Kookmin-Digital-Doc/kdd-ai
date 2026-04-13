@@ -55,7 +55,7 @@ def _create_supabase() -> AsyncMock:
     supabase = AsyncMock()
     supabase.search_documents.return_value = [
         SearchResult(
-            id=1,
+            chunk_id=1,
             doc_id="doc-1",
             content="제1조 내용",
             metadata={"doc_name": "학사요람.pdf", "page": 10},

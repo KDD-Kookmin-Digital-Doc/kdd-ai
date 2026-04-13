@@ -146,7 +146,7 @@ async def _save_answer_cache(
         )
         source_doc_ids = list({r.doc_id for r in (context.search_results or [])})
         sources = [
-            {"doc_id": s.doc_id, "doc_name": s.doc_name, "page": s.page}
+            {"doc_id": s.doc_id, "chunk_id": s.chunk_id, "doc_name": s.doc_name, "page": s.page}
             for s in context.source_docs
         ]
 

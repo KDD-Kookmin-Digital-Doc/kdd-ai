@@ -47,6 +47,7 @@ async def search_documents(
         context.source_docs = [
             SourceDoc(
                 doc_id=r.doc_id,
+                chunk_id=r.chunk_id,
                 doc_name=r.metadata.get("doc_name", ""),
                 page=r.metadata.get("page", 0),
             )

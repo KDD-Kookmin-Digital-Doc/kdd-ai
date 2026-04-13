@@ -60,7 +60,7 @@ class SupabaseVectorClient:
 
         return [
             SearchResult(
-                id=row["id"],
+                chunk_id=row["chunk_id"],
                 doc_id=row["doc_id"],
                 content=row["content"],
                 metadata=row["metadata"],
@@ -188,7 +188,7 @@ class SupabaseVectorClient:
         try:
             await self._run_with_timeout(
                 lambda: self._client.table("documents")
-                .select("id")
+                .select("chunk_id")
                 .limit(1)
                 .execute()
             )

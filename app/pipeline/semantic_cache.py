@@ -50,6 +50,7 @@ async def check_cache(
         context.cached_sources = [
             SourceDoc(
                 doc_id=s.get("doc_id", ""),
+                chunk_id=s["chunk_id"],
                 doc_name=s["doc_name"],
                 page=s["page"],
             )

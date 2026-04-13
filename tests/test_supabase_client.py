@@ -35,14 +35,14 @@ class TestSearchDocuments:
         mock_sb.rpc.return_value.execute.return_value = MagicMock(
             data=[
                 {
-                    "id": 1,
+                    "chunk_id": 1001,
                     "doc_id": "doc-1",
                     "content": "제1조 내용",
                     "metadata": {"doc_name": "학사요람.pdf", "page": 10},
                     "similarity": 0.89,
                 },
                 {
-                    "id": 2,
+                    "chunk_id": 1002,
                     "doc_id": "doc-1",
                     "content": "제2조 내용",
                     "metadata": {"doc_name": "학사요람.pdf", "page": 11},
@@ -55,8 +55,10 @@ class TestSearchDocuments:
 
         assert len(results) == 2
         assert isinstance(results[0], SearchResult)
+        assert results[0].chunk_id == 1001
         assert results[0].doc_id == "doc-1"
         assert results[0].similarity_score == 0.89
+        assert results[1].chunk_id == 1002
         assert results[1].metadata["page"] == 11
 
     async def test_empty_results(self, supabase_setup):

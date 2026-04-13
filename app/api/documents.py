@@ -42,6 +42,7 @@ async def embed_document(
                 [chunk.content], input_type="search_document"
             )
             embedded_chunks.append({
+                "chunk_id": chunk.chunk_id,
                 "content": chunk.content,
                 "embedding": embeddings[0],
                 "metadata": {
@@ -118,5 +119,5 @@ async def delete_document(
         "doc_id": doc_id,
         "deleted_chunk_count": deleted_chunk_count,
         "invalidated_cache_count": invalidated_cache_count,
-        "message": "문서 삭제가 완료되었습니다.",
+        "message": "해당 문서의 벡터 데이터 및 관련 캐시가 정상적으로 삭제되었습니다.",
     }

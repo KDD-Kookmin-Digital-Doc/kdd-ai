@@ -68,7 +68,7 @@ def _make_search_result(
     enforcement_date: str = "2026-03-01",
 ) -> SearchResult:
     return SearchResult(
-        id=1,
+        chunk_id=1,
         doc_id="doc-1",
         content=content,
         metadata={
