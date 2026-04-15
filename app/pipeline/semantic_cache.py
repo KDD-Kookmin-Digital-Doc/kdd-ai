@@ -45,9 +45,7 @@ async def check_cache(
             logger.debug("시맨틱 캐시 미스")
             return context
 
-        context.cache_hit = True
-        context.cached_answer = cache_match.answer
-        context.cached_sources = [
+        parsed_sources = [
             SourceDoc(
                 doc_id=s["doc_id"],
                 chunk_id=s["chunk_id"],
@@ -56,6 +54,9 @@ async def check_cache(
             )
             for s in cache_match.sources
         ]
+        context.cache_hit = True
+        context.cached_answer = cache_match.answer
+        context.cached_sources = parsed_sources
         logger.info(
             "시맨틱 캐시 히트 (유사도=%.4f, 질문=%r)",
             cache_match.similarity_score,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Path
 
 from app.api.dependencies import get_bedrock_client, get_supabase_client
 from app.clients.bedrock import BedrockClient
@@ -163,7 +163,7 @@ async def embed_document(
     },
 )
 async def delete_document(
-    doc_id: int,
+    doc_id: int = Path(..., ge=1),
     supabase: SupabaseVectorClient = Depends(get_supabase_client),
 ) -> dict:
     """문서 벡터 데이터를 삭제하고 관련 캐시를 무효화한다.
