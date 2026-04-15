@@ -36,14 +36,14 @@ class TestSearchDocuments:
             data=[
                 {
                     "chunk_id": 1001,
-                    "doc_id": "doc-1",
+                    "doc_id": 1,
                     "content": "제1조 내용",
                     "metadata": {"doc_name": "학사요람.pdf", "page": 10},
                     "similarity": 0.89,
                 },
                 {
                     "chunk_id": 1002,
-                    "doc_id": "doc-1",
+                    "doc_id": 1,
                     "content": "제2조 내용",
                     "metadata": {"doc_name": "학사요람.pdf", "page": 11},
                     "similarity": 0.82,
@@ -56,7 +56,7 @@ class TestSearchDocuments:
         assert len(results) == 2
         assert isinstance(results[0], SearchResult)
         assert results[0].chunk_id == 1001
-        assert results[0].doc_id == "doc-1"
+        assert results[0].doc_id == 1
         assert results[0].similarity_score == 0.89
         assert results[1].chunk_id == 1002
         assert results[1].metadata["page"] == 11
@@ -214,7 +214,7 @@ class TestInsertDocumentChunks:
             MagicMock(data=[{"id": 1}, {"id": 2}])
         )
 
-        count = await client.insert_document_chunks("doc-1", chunks)
+        count = await client.insert_document_chunks(1, chunks)
 
         assert count == 2
 
@@ -222,7 +222,7 @@ class TestInsertDocumentChunks:
         """빈 chunks 리스트는 DB 호출 없이 0 반환."""
         client, mock_sb = supabase_setup
 
-        count = await client.insert_document_chunks("doc-1", [])
+        count = await client.insert_document_chunks(1, [])
 
         assert count == 0
         mock_sb.table.return_value.insert.assert_not_called()
@@ -235,10 +235,10 @@ class TestInsertDocumentChunks:
             MagicMock(data=[{"id": 1}])
         )
 
-        await client.insert_document_chunks("doc-99", chunks)
+        await client.insert_document_chunks(99, chunks)
 
         inserted_payload = mock_sb.table.return_value.insert.call_args[0][0]
-        assert all(c["doc_id"] == "doc-99" for c in inserted_payload)
+        assert all(c["doc_id"] == 99 for c in inserted_payload)
 
 
 # ── delete_document_chunks 테스트 ──
@@ -251,7 +251,7 @@ class TestDeleteDocumentChunks:
             data=[{"id": 1}, {"id": 2}, {"id": 3}]
         )
 
-        count = await client.delete_document_chunks("doc-1")
+        count = await client.delete_document_chunks(1)
 
         assert count == 3
 
@@ -261,7 +261,7 @@ class TestDeleteDocumentChunks:
             data=[]
         )
 
-        count = await client.delete_document_chunks("doc-nonexistent")
+        count = await client.delete_document_chunks(12345)
 
         assert count == 0
 
@@ -276,7 +276,7 @@ class TestInvalidateCacheByDocId:
             data=[{"id": 10}, {"id": 11}]
         )
 
-        count = await client.invalidate_cache_by_doc_id("doc-1")
+        count = await client.invalidate_cache_by_doc_id(1)
 
         assert count == 2
 
@@ -286,7 +286,7 @@ class TestInvalidateCacheByDocId:
             data=[]
         )
 
-        count = await client.invalidate_cache_by_doc_id("doc-1")
+        count = await client.invalidate_cache_by_doc_id(1)
 
         assert count == 0
 
@@ -305,7 +305,7 @@ class TestInsertAnswerCache:
             question="휴학 기간",
             embedding=[0.1] * 1024,
             answer="최대 4년입니다.",
-            source_doc_ids=["doc-1"],
+            source_doc_ids=[1],
             sources=[{"doc_name": "학사요람.pdf", "page": 45}],
         )
 

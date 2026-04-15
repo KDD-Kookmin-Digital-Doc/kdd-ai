@@ -69,7 +69,7 @@ def _make_search_result(
 ) -> SearchResult:
     return SearchResult(
         chunk_id=1,
-        doc_id="doc-1",
+        doc_id=1,
         content=content,
         metadata={
             "doc_name": doc_name,

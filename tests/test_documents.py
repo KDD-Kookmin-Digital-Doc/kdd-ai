@@ -55,7 +55,7 @@ def _create_supabase(inserted_count: int | None = None) -> AsyncMock:
 
 
 def _make_embed_request(
-    doc_id: str = "doc-1",
+    doc_id: int = 1,
     chunk_count: int = 3,
     doc_name: str = "학사요람.pdf",
 ) -> EmbedRequest:
@@ -83,7 +83,7 @@ class TestEmbedResponseConsistency:
     @hyp_settings(max_examples=30)
     @given(
         chunk_count=st.integers(min_value=1, max_value=20),
-        doc_id=st.text(min_size=1, max_size=30).filter(lambda x: x.strip()),
+        doc_id=st.integers(min_value=1, max_value=2**31),
     )
     async def test_count_matches_input(self, chunk_count, doc_id):
         """성공 시 embedded_chunk_count == len(chunks)."""
@@ -132,7 +132,7 @@ class TestEmbedRoundtrip:
         doc_id_arg = call_args[0][0]
         chunks_arg = call_args[0][1]
 
-        assert doc_id_arg == "doc-1"
+        assert doc_id_arg == 1
         assert len(chunks_arg) == 2
         assert chunks_arg[0]["content"] == "제1조 내용"
         assert chunks_arg[0]["metadata"]["page"] == 1
@@ -153,7 +153,7 @@ class TestEmbedRoundtrip:
         supabase = _create_supabase()
 
         request = EmbedRequest(
-            doc_id="doc-test",
+            doc_id=999,
             metadata=DocumentMetadata(
                 doc_name="test.pdf",
                 category="학사",
@@ -183,8 +183,8 @@ class TestEmbedDocumentUnit:
 
         await embed_document(request, settings, bedrock, supabase)
 
-        supabase.delete_document_chunks.assert_called_once_with("doc-1")
-        supabase.invalidate_cache_by_doc_id.assert_called_once_with("doc-1")
+        supabase.delete_document_chunks.assert_called_once_with(1)
+        supabase.invalidate_cache_by_doc_id.assert_called_once_with(1)
 
     async def test_embedding_uses_search_document_type(self):
         """임베딩 호출 시 input_type이 search_document이다."""
@@ -245,11 +245,11 @@ class TestEmbedDocumentUnit:
         settings = _create_settings()
         bedrock = _create_bedrock()
         supabase = _create_supabase()
-        request = _make_embed_request(doc_id="my-doc-99")
+        request = _make_embed_request(doc_id=99)
 
         result = await embed_document(request, settings, bedrock, supabase)
 
-        assert result["doc_id"] == "my-doc-99"
+        assert result["doc_id"] == 99
 
     async def test_re_upload_same_doc_id(self):
         """동일 doc_id 재적재 시 삭제 → 적재 순서로 실행된다."""
@@ -258,13 +258,13 @@ class TestEmbedDocumentUnit:
         supabase = _create_supabase()
         supabase.delete_document_chunks.return_value = 5  # 기존 5개 삭제
 
-        request = _make_embed_request(doc_id="doc-1", chunk_count=2)
+        request = _make_embed_request(doc_id=1, chunk_count=2)
 
         result = await embed_document(request, settings, bedrock, supabase)
 
         # 삭제 먼저
-        supabase.delete_document_chunks.assert_called_once_with("doc-1")
-        supabase.invalidate_cache_by_doc_id.assert_called_once_with("doc-1")
+        supabase.delete_document_chunks.assert_called_once_with(1)
+        supabase.invalidate_cache_by_doc_id.assert_called_once_with(1)
         # 새로 적재
         assert result["embedded_chunk_count"] == 2
         assert result["status"] == "success"
@@ -283,10 +283,10 @@ class TestDeleteCascade:
         supabase.delete_document_chunks.return_value = 5
         supabase.invalidate_cache_by_doc_id.return_value = 2
 
-        result = await delete_document("doc-1", supabase)
+        result = await delete_document(1, supabase)
 
-        supabase.delete_document_chunks.assert_called_once_with("doc-1")
-        supabase.invalidate_cache_by_doc_id.assert_called_once_with("doc-1")
+        supabase.delete_document_chunks.assert_called_once_with(1)
+        supabase.invalidate_cache_by_doc_id.assert_called_once_with(1)
         assert result["deleted_chunk_count"] == 5
         assert result["invalidated_cache_count"] == 2
 
@@ -296,17 +296,17 @@ class TestDeleteCascade:
         supabase.delete_document_chunks.return_value = 3
         supabase.invalidate_cache_by_doc_id.return_value = 1
 
-        result = await delete_document("doc-99", supabase)
+        result = await delete_document(99, supabase)
 
         assert result["status"] == "success"
-        assert result["doc_id"] == "doc-99"
+        assert result["doc_id"] == 99
         assert result["deleted_chunk_count"] == 3
         assert result["invalidated_cache_count"] == 1
         assert "message" in result
 
     @hyp_settings(max_examples=30)
     @given(
-        doc_id=st.text(min_size=1, max_size=50).filter(lambda x: x.strip()),
+        doc_id=st.integers(min_value=1, max_value=2**31),
         chunk_count=st.integers(min_value=0, max_value=100),
         cache_count=st.integers(min_value=0, max_value=50),
     )
@@ -336,7 +336,7 @@ class TestDeleteIdempotency:
         supabase.delete_document_chunks.return_value = 0
         supabase.invalidate_cache_by_doc_id.return_value = 0
 
-        result = await delete_document("doc-nonexistent", supabase)
+        result = await delete_document(12345, supabase)
 
         assert result["status"] == "success"
         assert result["deleted_chunk_count"] == 0
@@ -348,8 +348,8 @@ class TestDeleteIdempotency:
         supabase.delete_document_chunks.side_effect = [5, 0]
         supabase.invalidate_cache_by_doc_id.side_effect = [2, 0]
 
-        result1 = await delete_document("doc-1", supabase)
-        result2 = await delete_document("doc-1", supabase)
+        result1 = await delete_document(1, supabase)
+        result2 = await delete_document(1, supabase)
 
         assert result1["status"] == "success"
         assert result1["deleted_chunk_count"] == 5
@@ -367,5 +367,5 @@ class TestDeleteIdempotency:
         supabase.invalidate_cache_by_doc_id.return_value = 0
 
         for _ in range(repeat):
-            result = await delete_document("doc-1", supabase)
+            result = await delete_document(1, supabase)
             assert result["status"] == "success"

@@ -145,7 +145,7 @@ class TestChatRequest:
 class TestEmbedRequest:
     def test_valid(self):
         req = EmbedRequest(
-            doc_id="doc-1",
+            doc_id=1,
             metadata=DocumentMetadata(
                 doc_name="test.pdf",
                 category="학사",
@@ -153,13 +153,13 @@ class TestEmbedRequest:
             ),
             chunks=[DocumentChunk(chunk_id=1, content="내용", page=1)],
         )
-        assert req.doc_id == "doc-1"
+        assert req.doc_id == 1
         assert len(req.chunks) == 1
 
     def test_empty_chunks(self):
         with pytest.raises(ValidationError):
             EmbedRequest(
-                doc_id="doc-1",
+                doc_id=1,
                 metadata=DocumentMetadata(
                     doc_name="test.pdf",
                     category="학사",
@@ -181,7 +181,7 @@ class TestEmbedRequest:
     def test_duplicate_chunk_ids_rejected(self):
         with pytest.raises(ValidationError):
             EmbedRequest(
-                doc_id="doc-1",
+                doc_id=1,
                 metadata=DocumentMetadata(
                     doc_name="test.pdf",
                     category="학사",
@@ -193,10 +193,10 @@ class TestEmbedRequest:
                 ],
             )
 
-    def test_blank_doc_id_rejected(self):
+    def test_invalid_doc_id_rejected(self):
         with pytest.raises(ValidationError):
             EmbedRequest(
-                doc_id="   ",
+                doc_id=0,
                 metadata=DocumentMetadata(
                     doc_name="test.pdf",
                     category="학사",
@@ -285,7 +285,7 @@ class TestSearchResult:
     def test_creation(self):
         r = SearchResult(
             chunk_id=1,
-            doc_id="doc-1",
+            doc_id=1,
             content="내용",
             metadata={"doc_name": "test.pdf", "page": 1},
             similarity_score=0.85,
@@ -296,7 +296,7 @@ class TestSearchResult:
 
 class TestSourceDoc:
     def test_creation(self):
-        s = SourceDoc(doc_id="doc-1", chunk_id=42, doc_name="test.pdf", page=3)
+        s = SourceDoc(doc_id=1, chunk_id=42, doc_name="test.pdf", page=3)
         assert s.chunk_id == 42
         assert s.page == 3
 
@@ -318,7 +318,7 @@ class TestPipelineContext:
     def test_mutable_defaults_isolation(self):
         ctx1 = PipelineContext(original_question="q1")
         ctx2 = PipelineContext(original_question="q2")
-        ctx1.source_docs.append(SourceDoc(doc_id="doc-a", chunk_id=1, doc_name="a.pdf", page=1))
+        ctx1.source_docs.append(SourceDoc(doc_id=10, chunk_id=1, doc_name="a.pdf", page=1))
         assert len(ctx2.source_docs) == 0
 
 
@@ -328,7 +328,7 @@ class TestAnswerCache:
             question="휴학 기간",
             embedding=[0.1] * 1024,
             answer="최대 4년입니다.",
-            source_doc_ids=["doc-1"],
+            source_doc_ids=[1],
             sources=[{"doc_name": "학사요람.pdf", "page": 45}],
         )
         assert cache.embedding is not None

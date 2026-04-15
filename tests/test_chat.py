@@ -71,7 +71,7 @@ def _make_chat_request(
 
 
 def _make_search_result(
-    doc_id: str = "doc-1",
+    doc_id: int = 1,
     similarity: float = 0.85,
     chunk_id: int = 1,
 ) -> SearchResult:
@@ -89,7 +89,7 @@ def _make_cache_match() -> CacheMatch:
         question="캐시된 질문",
         answer="캐시된 답변",
         similarity_score=0.97,
-        sources=[{"doc_id": "doc-1", "chunk_id": 1, "doc_name": "학사요람.pdf", "page": 45}],
+        sources=[{"doc_id": 1, "chunk_id": 1, "doc_name": "학사요람.pdf", "page": 45}],
     )
 
 
@@ -228,8 +228,8 @@ class TestAnswerCacheCompleteness:
         context = PipelineContext(
             original_question="휴학 기간은?",
             intent="academic",
-            search_results=[_make_search_result(doc_id="doc-1")],
-            source_docs=[SourceDoc(doc_id="doc-1", chunk_id=1, doc_name="학사요람.pdf", page=10)],
+            search_results=[_make_search_result(doc_id=1)],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="학사요람.pdf", page=10)],
         )
 
         await _save_answer_cache(context, ["최대 ", "4년입니다."], bedrock, supabase)
@@ -239,7 +239,7 @@ class TestAnswerCacheCompleteness:
         assert cache.question == "휴학 기간은?"
         assert len(cache.embedding) == 1024
         assert cache.answer == "최대 4년입니다."
-        assert "doc-1" in cache.source_doc_ids
+        assert 1 in cache.source_doc_ids
         assert cache.sources[0]["doc_name"] == "학사요람.pdf"
         assert cache.sources[0]["chunk_id"] == 1
 
@@ -257,7 +257,7 @@ class TestAnswerCacheCompleteness:
             original_question=question,
             intent="academic",
             search_results=[_make_search_result()],
-            source_docs=[SourceDoc(doc_id="doc-1", chunk_id=1, doc_name="a.pdf", page=1)],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
         )
 
         await _save_answer_cache(context, [answer], bedrock, supabase)
@@ -341,7 +341,7 @@ class TestNoCacheForChitchatAndFallback:
             original_question="질문",
             cache_hit=True,
             cached_answer="캐시 답변",
-            cached_sources=[SourceDoc(doc_id="d1", chunk_id=1, doc_name="a.pdf", page=1)],
+            cached_sources=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
         )
 
         with patch("app.api.chat.stream_sse_response") as mock_sse:
@@ -424,7 +424,7 @@ class TestErrorPropagation:
             original_question="질문",
             intent="academic",
             search_results=[_make_search_result()],
-            source_docs=[SourceDoc(doc_id="d1", chunk_id=1, doc_name="a.pdf", page=1)],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
         )
 
         # 예외가 발생하지 않아야 함
