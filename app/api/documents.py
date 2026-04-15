@@ -84,6 +84,11 @@ async def embed_document(
             embeddings = await bedrock.embed_texts(
                 [c.content for c in batch], input_type="search_document"
             )
+            if len(embeddings) != len(batch):
+                raise RuntimeError(
+                    f"embedding_count_mismatch: expected={len(batch)}, "
+                    f"got={len(embeddings)}"
+                )
             for chunk, embedding in zip(batch, embeddings):
                 embedded_chunks.append({
                     "chunk_id": chunk.chunk_id,

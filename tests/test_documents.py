@@ -10,7 +10,7 @@ from hypothesis import strategies as st
 
 from app.config import Settings
 from app.models.schemas import DocumentChunk, DocumentMetadata, EmbedRequest
-from app.api.documents import delete_document, embed_document
+from app.api.documents import EMBED_BATCH_SIZE, delete_document, embed_document
 
 
 # ── 헬퍼 ──
@@ -272,52 +272,62 @@ class TestEmbedDocumentUnit:
         assert result["status"] == "success"
 
     async def test_batches_at_batch_size_boundary(self):
-        """정확히 BATCH_SIZE(96) 청크는 1회 호출로 끝난다."""
+        """정확히 EMBED_BATCH_SIZE 청크는 1회 호출로 끝난다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
         supabase = _create_supabase()
-        request = _make_embed_request(chunk_count=96)
+        request = _make_embed_request(chunk_count=EMBED_BATCH_SIZE)
 
         await embed_document(request, settings, bedrock, supabase)
 
         assert bedrock.embed_texts.await_count == 1
         call_args = bedrock.embed_texts.call_args_list[0]
-        assert len(call_args.args[0]) == 96
+        assert len(call_args.args[0]) == EMBED_BATCH_SIZE
 
     async def test_multiple_batches_all_success(self):
-        """BATCH_SIZE 초과 시 여러 배치로 나뉘고 모두 성공한다."""
+        """EMBED_BATCH_SIZE 초과 시 여러 배치로 나뉘고 모두 성공한다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
         supabase = _create_supabase()
-        request = _make_embed_request(chunk_count=200)
+        remainder = 8
+        chunk_count = EMBED_BATCH_SIZE * 2 + remainder
+        request = _make_embed_request(chunk_count=chunk_count)
 
         result = await embed_document(request, settings, bedrock, supabase)
 
-        # 96 + 96 + 8 → 3 배치
         assert bedrock.embed_texts.await_count == 3
         batch_sizes = [
             len(c.args[0]) for c in bedrock.embed_texts.call_args_list
         ]
-        assert batch_sizes == [96, 96, 8]
-        assert result["embedded_chunk_count"] == 200
+        assert batch_sizes == [EMBED_BATCH_SIZE, EMBED_BATCH_SIZE, remainder]
+        assert result["embedded_chunk_count"] == chunk_count
         assert result["status"] == "success"
 
     async def test_partial_batch_failure(self):
         """배치 2개 중 1개만 실패 시 실패 배치의 청크만 failed_chunks에 기록된다."""
         settings = _create_settings()
-        # 청크 100개 → 배치 0 (0~95) 성공, 배치 1 (96~99) 실패
-        bedrock = _create_bedrock(fail_indices={97})
+        remainder = 4
+        chunk_count = EMBED_BATCH_SIZE + remainder
+        # 배치 0 (0 ~ BATCH_SIZE-1) 성공, 배치 1 (BATCH_SIZE ~ chunk_count-1) 실패
+        fail_index = EMBED_BATCH_SIZE + 1
+        bedrock = _create_bedrock(fail_indices={fail_index})
         supabase = _create_supabase()
-        request = _make_embed_request(chunk_count=100)
+        request = _make_embed_request(chunk_count=chunk_count)
 
         result = await embed_document(request, settings, bedrock, supabase)
 
         assert result["status"] == "partial_failure"
-        assert result["embedded_chunk_count"] == 96
-        assert len(result["failed_chunks"]) == 4
-        assert [f["index"] for f in result["failed_chunks"]] == [96, 97, 98, 99]
-        # 성공분은 DB에 저장됨
+        assert result["embedded_chunk_count"] == EMBED_BATCH_SIZE
+        assert len(result["failed_chunks"]) == remainder
+        expected_failed_indices = list(
+            range(EMBED_BATCH_SIZE, EMBED_BATCH_SIZE + remainder)
+        )
+        assert [
+            f["index"] for f in result["failed_chunks"]
+        ] == expected_failed_indices
+        # 성공분은 DB에 저장됨 (세 부수효과 모두 호출)
         supabase.delete_document_chunks.assert_called_once_with(1)
+        supabase.invalidate_cache_by_doc_id.assert_called_once_with(1)
         supabase.insert_document_chunks.assert_called_once()
 
     async def test_re_upload_same_doc_id(self):
