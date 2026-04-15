@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+EMBED_BATCH_SIZE = 96
+
 
 @router.post(
     "/api/documents/embed",
@@ -72,29 +74,36 @@ async def embed_document(
 
     동일 doc_id 재적재 시 기존 청크 삭제 + 캐시 무효화 후 새 청크 적재 (last-write-wins).
     """
-    # 1. 청크별 임베딩 생성 (기존 데이터 삭제 전에 먼저 준비)
+    # 1. 청크 배치 임베딩 (기존 데이터 삭제 전에 먼저 준비)
     embedded_chunks: list[dict] = []
     failed_chunks: list[dict] = []
 
-    for i, chunk in enumerate(request.chunks):
+    for batch_start in range(0, len(request.chunks), EMBED_BATCH_SIZE):
+        batch = request.chunks[batch_start : batch_start + EMBED_BATCH_SIZE]
         try:
             embeddings = await bedrock.embed_texts(
-                [chunk.content], input_type="search_document"
+                [c.content for c in batch], input_type="search_document"
             )
-            embedded_chunks.append({
-                "chunk_id": chunk.chunk_id,
-                "content": chunk.content,
-                "embedding": embeddings[0],
-                "metadata": {
-                    "doc_name": request.metadata.doc_name,
-                    "page": chunk.page,
-                    "category": request.metadata.category,
-                    "enforcement_date": str(request.metadata.enforcement_date),
-                },
-            })
-        except Exception as exc:
-            logger.exception("청크 %d 임베딩 실패", i)
-            failed_chunks.append({"index": i, "error": "embedding_failed"})
+            for chunk, embedding in zip(batch, embeddings):
+                embedded_chunks.append({
+                    "chunk_id": chunk.chunk_id,
+                    "content": chunk.content,
+                    "embedding": embedding,
+                    "metadata": {
+                        "doc_name": request.metadata.doc_name,
+                        "page": chunk.page,
+                        "category": request.metadata.category,
+                        "enforcement_date": str(request.metadata.enforcement_date),
+                    },
+                })
+        except Exception:
+            logger.exception(
+                "배치 임베딩 실패: offset=%d, size=%d", batch_start, len(batch)
+            )
+            for i in range(len(batch)):
+                failed_chunks.append(
+                    {"index": batch_start + i, "error": "embedding_failed"}
+                )
 
     # 2. 성공분이 있을 때만 기존 삭제 + 새 청크 삽입
     inserted_count = 0
