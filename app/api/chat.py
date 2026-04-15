@@ -199,7 +199,7 @@ async def _save_answer_cache(
                     "example": (
                         'data: {"type": "text", "content": "휴학은 "}\n\n'
                         'data: {"type": "text", "content": "신청서를 제출하면 됩니다."}\n\n'
-                        'data: {"type": "source", "sources": [{"doc_id": "academic-2024", "page": 12}]}\n\n'
+                        'data: {"type": "source", "sources": [{"doc_id": 20240001, "chunk_id": 1012, "doc_name": "학사규정_2024", "page": 12}]}\n\n'
                         'data: {"type": "done"}\n\n'
                     )
                 }

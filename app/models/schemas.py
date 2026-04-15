@@ -116,8 +116,8 @@ class DocumentChunk(BaseModel):
     chunk_id: int = Field(
         ...,
         ge=1,
-        description="문서 내 청크 고유 번호. 1부터 시작하며 동일 doc_id 내에서 유일해야 함.",
-        examples=[1],
+        description="청크 고유 번호 (BE가 전역 유일하게 부여, `documents` 테이블 PK).",
+        examples=[1001],
     )
     content: str = Field(
         ...,
@@ -138,11 +138,11 @@ class DocumentChunk(BaseModel):
 class EmbedRequest(BaseModel):
     """POST /api/documents/embed 요청 모델."""
 
-    doc_id: str = Field(
+    doc_id: int = Field(
         ...,
-        min_length=1,
-        description="문서 식별자. 동일 값 재적재 시 기존 청크는 삭제 후 재삽입됨.",
-        examples=["academic-2024"],
+        ge=1,
+        description="문서 식별자 (BE의 Document PK). 동일 값 재적재 시 기존 청크는 삭제 후 재삽입됨.",
+        examples=[20240001],
     )
     metadata: DocumentMetadata
     chunks: list[DocumentChunk] = Field(
@@ -155,7 +155,7 @@ class EmbedRequest(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                    "doc_id": "academic-2024",
+                    "doc_id": 20240001,
                     "metadata": {
                         "doc_name": "학사규정_2024",
                         "category": "학사",
@@ -163,12 +163,12 @@ class EmbedRequest(BaseModel):
                     },
                     "chunks": [
                         {
-                            "chunk_id": 1,
+                            "chunk_id": 1001,
                             "content": "제1조(목적) 이 규정은 학사운영에 관한 사항을 정함을 목적으로 한다.",
                             "page": 1,
                         },
                         {
-                            "chunk_id": 2,
+                            "chunk_id": 1002,
                             "content": "제2조(적용범위) 이 규정은 본교 학부생에게 적용한다.",
                             "page": 1,
                         },
@@ -177,11 +177,6 @@ class EmbedRequest(BaseModel):
             ]
         }
     )
-
-    @field_validator("doc_id")
-    @classmethod
-    def doc_id_not_blank(cls, v: str) -> str:
-        return _check_not_blank(v, "doc_id")
 
     @field_validator("chunks")
     @classmethod

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Path
 
 from app.api.dependencies import get_bedrock_client, get_supabase_client
 from app.clients.bedrock import BedrockClient
@@ -38,7 +38,7 @@ router = APIRouter()
                             "summary": "전체 성공",
                             "value": {
                                 "status": "success",
-                                "doc_id": "academic-2024",
+                                "doc_id": 20240001,
                                 "embedded_chunk_count": 12,
                                 "message": "문서 벡터화 및 적재가 완료되었습니다.",
                             },
@@ -47,7 +47,7 @@ router = APIRouter()
                             "summary": "부분 실패",
                             "value": {
                                 "status": "partial_failure",
-                                "doc_id": "academic-2024",
+                                "doc_id": 20240001,
                                 "embedded_chunk_count": 10,
                                 "failed_chunks": [{"index": 5, "error": "embedding_failed"}],
                                 "message": "일부 청크의 벡터화에 실패했습니다.",
@@ -151,7 +151,7 @@ async def embed_document(
                 "application/json": {
                     "example": {
                         "status": "success",
-                        "doc_id": "academic-2024",
+                        "doc_id": 20240001,
                         "deleted_chunk_count": 12,
                         "invalidated_cache_count": 3,
                         "message": "해당 문서의 벡터 데이터 및 관련 캐시가 정상적으로 삭제되었습니다.",
@@ -163,7 +163,7 @@ async def embed_document(
     },
 )
 async def delete_document(
-    doc_id: str,
+    doc_id: int = Path(..., ge=1),
     supabase: SupabaseVectorClient = Depends(get_supabase_client),
 ) -> dict:
     """문서 벡터 데이터를 삭제하고 관련 캐시를 무효화한다.

@@ -68,7 +68,7 @@ def _make_cache_match(
         question=question,
         answer=answer,
         similarity_score=similarity,
-        sources=sources or [{"doc_id": "doc-1", "chunk_id": 1, "doc_name": "학사요람.pdf", "page": 45}],
+        sources=sources or [{"doc_id": 1, "chunk_id": 1, "doc_name": "학사요람.pdf", "page": 45}],
     )
 
 
@@ -182,7 +182,7 @@ class TestCheckCacheUnit:
         """캐시 히트 시 PipelineContext가 올바르게 설정된다."""
         mock_supabase.search_answer_cache.return_value = _make_cache_match(
             answer="최대 4년입니다.",
-            sources=[{"doc_id": "doc-1", "chunk_id": 42, "doc_name": "학사요람.pdf", "page": 45}],
+            sources=[{"doc_id": 1, "chunk_id": 42, "doc_name": "학사요람.pdf", "page": 45}],
         )
 
         ctx = _make_context("휴학 기간")
@@ -191,7 +191,7 @@ class TestCheckCacheUnit:
         assert result.cache_hit is True
         assert result.cached_answer == "최대 4년입니다."
         assert len(result.cached_sources) == 1
-        assert result.cached_sources[0].doc_id == "doc-1"
+        assert result.cached_sources[0].doc_id == 1
         assert result.cached_sources[0].chunk_id == 42
         assert result.cached_sources[0].doc_name == "학사요람.pdf"
         assert result.cached_sources[0].page == 45
@@ -265,9 +265,9 @@ class TestCheckCacheUnit:
     ):
         """캐시 히트 시 여러 출처가 올바르게 매핑된다."""
         sources = [
-            {"doc_id": "doc-1", "chunk_id": 1, "doc_name": "학사요람.pdf", "page": 45},
-            {"doc_id": "doc-1", "chunk_id": 2, "doc_name": "학사요람.pdf", "page": 46},
-            {"doc_id": "doc-2", "chunk_id": 3, "doc_name": "학칙.pdf", "page": 10},
+            {"doc_id": 1, "chunk_id": 1, "doc_name": "학사요람.pdf", "page": 45},
+            {"doc_id": 1, "chunk_id": 2, "doc_name": "학사요람.pdf", "page": 46},
+            {"doc_id": 2, "chunk_id": 3, "doc_name": "학칙.pdf", "page": 10},
         ]
         mock_supabase.search_answer_cache.return_value = _make_cache_match(
             sources=sources,
@@ -277,6 +277,6 @@ class TestCheckCacheUnit:
         result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
 
         assert len(result.cached_sources) == 3
-        assert result.cached_sources[2].doc_id == "doc-2"
+        assert result.cached_sources[2].doc_id == 2
         assert result.cached_sources[2].doc_name == "학칙.pdf"
         assert result.cached_sources[2].page == 10

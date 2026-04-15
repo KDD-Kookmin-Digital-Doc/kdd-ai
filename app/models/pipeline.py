@@ -20,7 +20,7 @@ class SearchResult:
     """벡터 검색 결과."""
 
     chunk_id: int
-    doc_id: str
+    doc_id: int
     content: str
     metadata: dict
     similarity_score: float
@@ -30,7 +30,7 @@ class SearchResult:
 class SourceDoc:
     """출처 정보."""
 
-    doc_id: str
+    doc_id: int
     chunk_id: int
     doc_name: str
     page: int
@@ -43,7 +43,7 @@ class AnswerCache:
     question: str
     embedding: list[float]
     answer: str
-    source_doc_ids: list[str]
+    source_doc_ids: list[int]
     sources: list[dict]
 
 

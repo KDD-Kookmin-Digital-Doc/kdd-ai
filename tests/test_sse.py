@@ -41,7 +41,7 @@ def _create_bedrock(tokens: list[str] | None = None) -> AsyncMock:
 
 def _make_search_result(
     similarity: float = 0.85,
-    doc_id: str = "doc-1",
+    doc_id: int = 1,
     doc_name: str = "학사요람.pdf",
     page: int = 10,
     chunk_id: int = 1,
@@ -56,7 +56,7 @@ def _make_search_result(
 
 
 def _make_source_doc(
-    doc_id: str = "doc-1",
+    doc_id: int = 1,
     doc_name: str = "학사요람.pdf",
     page: int = 10,
     chunk_id: int = 1,
@@ -265,7 +265,7 @@ class TestSourceInfoPreservation:
     @given(
         doc_name=st.text(min_size=1, max_size=50).filter(lambda x: x.strip()),
         page=st.integers(min_value=1, max_value=1000),
-        doc_id=st.text(min_size=1, max_size=20).filter(lambda x: x.strip()),
+        doc_id=st.integers(min_value=1, max_value=2**31),
     )
     async def test_cache_hit_sources_preserved(self, doc_name, page, doc_id):
         """캐시 히트 시 sources에 doc_id, doc_name, page가 보존된다."""
@@ -300,10 +300,10 @@ class TestSourceInfoPreservation:
             original_question="q",
             intent="academic",
             search_results=[_make_search_result(
-                doc_id="doc-99", doc_name="학칙.pdf", page=42,
+                doc_id=99, doc_name="학칙.pdf", page=42,
             )],
             source_docs=[_make_source_doc(
-                doc_id="doc-99", doc_name="학칙.pdf", page=42,
+                doc_id=99, doc_name="학칙.pdf", page=42,
             )],
         )
 
@@ -313,7 +313,7 @@ class TestSourceInfoPreservation:
 
         meta = chunks[0]
         src = meta["sources"][0]
-        assert src["doc_id"] == "doc-99"
+        assert src["doc_id"] == 99
         assert src["chunk_id"] == 1
         assert src["doc_name"] == "학칙.pdf"
         assert src["page"] == 42
@@ -327,9 +327,9 @@ class TestSourceInfoPreservation:
             cache_hit=True,
             cached_answer="a",
             cached_sources=[
-                SourceDoc(doc_id="d1", chunk_id=101, doc_name="a.pdf", page=1),
-                SourceDoc(doc_id="d2", chunk_id=102, doc_name="b.pdf", page=2),
-                SourceDoc(doc_id="d3", chunk_id=103, doc_name="c.pdf", page=3),
+                SourceDoc(doc_id=1, chunk_id=101, doc_name="a.pdf", page=1),
+                SourceDoc(doc_id=2, chunk_id=102, doc_name="b.pdf", page=2),
+                SourceDoc(doc_id=3, chunk_id=103, doc_name="c.pdf", page=3),
             ],
         )
 

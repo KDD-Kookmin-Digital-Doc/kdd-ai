@@ -132,7 +132,7 @@ class SupabaseVectorClient:
     # ── 문서 삽입/삭제 ──
 
     async def insert_document_chunks(
-        self, doc_id: str, chunks: list[dict]
+        self, doc_id: int, chunks: list[dict]
     ) -> int:
         """문서 청크를 documents 테이블에 일괄 삽입. 삽입된 행 수 반환."""
         if not chunks:
@@ -143,7 +143,7 @@ class SupabaseVectorClient:
         )
         return len(result.data or [])
 
-    async def delete_document_chunks(self, doc_id: str) -> int:
+    async def delete_document_chunks(self, doc_id: int) -> int:
         """doc_id에 해당하는 모든 청크 삭제. 삭제된 행 수 반환."""
         result = await self._run_with_timeout(
             lambda: self._client.table("documents")
@@ -155,7 +155,7 @@ class SupabaseVectorClient:
 
     # ── 캐시 관리 ──
 
-    async def invalidate_cache_by_doc_id(self, doc_id: str) -> int:
+    async def invalidate_cache_by_doc_id(self, doc_id: int) -> int:
         """source_doc_ids에 해당 doc_id가 포함된 answer_cache 삭제."""
         result = await self._run_with_timeout(
             lambda: self._client.table("answer_cache")

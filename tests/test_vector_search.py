@@ -50,7 +50,7 @@ def _make_context(
 
 def _make_search_result(
     similarity: float = 0.85,
-    doc_id: str = "doc-1",
+    doc_id: int = 1,
     doc_name: str = "학사요람.pdf",
     page: int = 10,
     chunk_id: int = 1,
@@ -216,8 +216,8 @@ class TestSearchDocumentsUnit:
         settings = _create_settings()
         bedrock = _create_bedrock()
         results = [
-            _make_search_result(doc_id="doc-1", doc_name="학사요람.pdf", page=45, chunk_id=111),
-            _make_search_result(doc_id="doc-2", doc_name="학칙.pdf", page=10, chunk_id=222),
+            _make_search_result(doc_id=1, doc_name="학사요람.pdf", page=45, chunk_id=111),
+            _make_search_result(doc_id=2, doc_name="학칙.pdf", page=10, chunk_id=222),
         ]
         supabase = _create_supabase(search_results=results)
 
@@ -225,11 +225,11 @@ class TestSearchDocumentsUnit:
         result = await search_documents(ctx, bedrock, supabase, settings)
 
         assert len(result.source_docs) == 2
-        assert result.source_docs[0].doc_id == "doc-1"
+        assert result.source_docs[0].doc_id == 1
         assert result.source_docs[0].chunk_id == 111
         assert result.source_docs[0].doc_name == "학사요람.pdf"
         assert result.source_docs[0].page == 45
-        assert result.source_docs[1].doc_id == "doc-2"
+        assert result.source_docs[1].doc_id == 2
         assert result.source_docs[1].chunk_id == 222
 
     async def test_fallback_calls_similar_questions(self):
