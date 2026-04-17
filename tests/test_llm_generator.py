@@ -283,6 +283,17 @@ class TestBuildAcademicMessages:
 
         assert "(정보 없음)" in system_prompt
 
+    def test_history_handling_section_present(self):
+        """academic 시스템 프롬프트에 '대화 히스토리 처리' 섹션과 핵심 지시가 포함된다 (Task 24.3)."""
+        settings = _create_settings()
+        ctx = _make_context(search_results=[_make_search_result()])
+
+        system_prompt, _ = build_academic_messages(ctx, settings)
+
+        assert "## 대화 히스토리 처리" in system_prompt
+        assert "현재 질문" in system_prompt
+        assert "단순 반복하지" in system_prompt or "반복하지" in system_prompt
+
 
 class TestBuildChitchatMessages:
     def test_uses_fixed_system_prompt(self):
