@@ -100,8 +100,10 @@ class DocumentMetadata(BaseModel):
     category: str = Field(
         ..., min_length=1, description="문서 카테고리.", examples=["학사"]
     )
-    enforcement_date: date = Field(
-        ..., description="해당 규정 시행일 (ISO-8601).", examples=["2024-03-01"]
+    enforcement_date: date | None = Field(
+        default=None,
+        description="해당 규정 시행일 (ISO-8601). null 허용 — BE 시행일 메타데이터 정책 확정 전까지 임시.",
+        examples=["2024-03-01", None],
     )
 
     @field_validator("doc_name", "category")

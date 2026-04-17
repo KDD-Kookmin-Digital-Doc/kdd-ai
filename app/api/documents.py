@@ -90,16 +90,20 @@ async def embed_document(
                     f"got={len(embeddings)}"
                 )
             for chunk, embedding in zip(batch, embeddings):
+                metadata_dict = {
+                    "doc_name": request.metadata.doc_name,
+                    "page": chunk.page,
+                    "category": request.metadata.category,
+                }
+                if request.metadata.enforcement_date is not None:
+                    metadata_dict["enforcement_date"] = str(
+                        request.metadata.enforcement_date
+                    )
                 embedded_chunks.append({
                     "chunk_id": chunk.chunk_id,
                     "content": chunk.content,
                     "embedding": embedding,
-                    "metadata": {
-                        "doc_name": request.metadata.doc_name,
-                        "page": chunk.page,
-                        "category": request.metadata.category,
-                        "enforcement_date": str(request.metadata.enforcement_date),
-                    },
+                    "metadata": metadata_dict,
                 })
         except Exception:
             logger.exception(

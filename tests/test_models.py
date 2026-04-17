@@ -222,6 +222,21 @@ class TestEmbedRequest:
         )
         assert meta.enforcement_date == date(2026, 3, 1)
 
+    def test_enforcement_date_optional_none(self):
+        meta = DocumentMetadata(
+            doc_name="test.pdf",
+            category="학사",
+            enforcement_date=None,
+        )
+        assert meta.enforcement_date is None
+
+    def test_enforcement_date_default_none(self):
+        meta = DocumentMetadata(
+            doc_name="test.pdf",
+            category="학사",
+        )
+        assert meta.enforcement_date is None
+
 
 class TestFAQAnalyzeRequest:
     def test_defaults(self):
