@@ -290,6 +290,18 @@ class TestInvalidateCacheByDocId:
 
         assert count == 0
 
+    async def test_contains_argument_is_stringified(self, supabase_setup):
+        """postgrest-py의 .contains()는 array 원소를 ",".join()하므로 str 필수.
+        BIGINT[] 컬럼이라도 호출 측에서 stringify해야 TypeError 방지됨.
+        """
+        client, mock_sb = supabase_setup
+        contains_mock = mock_sb.table.return_value.delete.return_value.contains
+        contains_mock.return_value.execute.return_value = MagicMock(data=[])
+
+        await client.invalidate_cache_by_doc_id(20240001)
+
+        contains_mock.assert_called_once_with("source_doc_ids", ["20240001"])
+
 
 # ── insert_answer_cache 테스트 ──
 

@@ -157,10 +157,12 @@ class SupabaseVectorClient:
 
     async def invalidate_cache_by_doc_id(self, doc_id: int) -> int:
         """source_doc_ids에 해당 doc_id가 포함된 answer_cache 삭제."""
+        # postgrest-py가 array 원소를 ",".join()하므로 str 필수.
+        # 서버 측에서 BIGINT[] 컬럼으로 자동 캐스트됨.
         result = await self._run_with_timeout(
             lambda: self._client.table("answer_cache")
             .delete()
-            .contains("source_doc_ids", [doc_id])
+            .contains("source_doc_ids", [str(doc_id)])
             .execute()
         )
         return len(result.data or [])
