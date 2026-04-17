@@ -119,9 +119,10 @@ class TestUserContextInPrompt:
     )
     async def test_user_context_not_in_chitchat_prompt(self, user_context):
         """잡담 경로에서는 user_context가 프롬프트에 포함되지 않는다."""
+        settings = _create_settings()
         ctx = _make_context(intent="chitchat", user_context=user_context)
 
-        system_prompt, _ = build_chitchat_messages(ctx)
+        system_prompt, _ = build_chitchat_messages(ctx, settings)
 
         assert system_prompt == _CHITCHAT_SYSTEM_PROMPT
 
@@ -286,24 +287,47 @@ class TestBuildAcademicMessages:
 class TestBuildChitchatMessages:
     def test_uses_fixed_system_prompt(self):
         """잡담 경로는 고정된 시스템 프롬프트를 사용한다."""
+        settings = _create_settings()
         ctx = _make_context(intent="chitchat")
 
-        system_prompt, _ = build_chitchat_messages(ctx)
+        system_prompt, _ = build_chitchat_messages(ctx, settings)
 
         assert "2문장 이내" in system_prompt
 
-    def test_question_in_messages(self):
-        """질문이 메시지에 포함된다."""
+    def test_question_in_messages_no_history(self):
+        """history가 없으면 질문 1개만 메시지에 포함된다."""
+        settings = _create_settings()
         ctx = _make_context(
             question="안녕하세요",
             rewritten="안녕하세요",
             intent="chitchat",
         )
 
-        _, messages = build_chitchat_messages(ctx)
+        _, messages = build_chitchat_messages(ctx, settings)
 
         assert len(messages) == 1
         assert messages[0]["content"][0]["text"] == "안녕하세요"
+
+    def test_history_included_in_messages(self):
+        """history가 있으면 메시지 배열에 포함된다."""
+        settings = _create_settings()
+        ctx = _make_context(
+            question="네 반가워요",
+            rewritten="네 반가워요",
+            intent="chitchat",
+            history=[
+                {"role": "user", "content": "안녕"},
+                {"role": "assistant", "content": "안녕하세요! 학사규정 궁금한 점 있으면 질문해주세요."},
+            ],
+        )
+
+        _, messages = build_chitchat_messages(ctx, settings)
+
+        # history 2개 + 현재 질문 1개 = 3개
+        assert len(messages) == 3
+        assert messages[0]["content"][0]["text"] == "안녕"
+        assert messages[1]["content"][0]["text"] == "안녕하세요! 학사규정 궁금한 점 있으면 질문해주세요."
+        assert messages[2]["content"][0]["text"] == "네 반가워요"
 
 
 class TestGenerateResponse:

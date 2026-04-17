@@ -43,6 +43,10 @@ _CHITCHAT_SYSTEM_PROMPT = """\
 학사규정에 대해 궁금한 점이 있으면 질문해달라고 안내하세요.
 절대로 학사규정 외의 주제에 대해 상세한 답변을 생성하지 마세요.
 응답은 2문장 이내로 제한합니다.
+
+대화 히스토리가 제공된 경우:
+- 이전 대화 맥락을 자연스럽게 이어가세요. 매번 처음 만난 것처럼 인사하지 마세요.
+- 잡담이 계속되고 있다면, 학사규정에 대해 도움이 필요하면 질문해달라고 더 적극적으로 안내하세요.
 """
 
 
@@ -144,10 +148,20 @@ def build_academic_messages(
 
 def build_chitchat_messages(
     context: PipelineContext,
+    settings: Settings,
 ) -> tuple[str, list[dict]]:
     """잡담 경로의 시스템 프롬프트와 메시지 배열을 구성한다."""
     question = context.rewritten_question or context.original_question
-    messages = [{"role": "user", "content": [{"text": question}]}]
+    budget = _calculate_history_budget(_CHITCHAT_SYSTEM_PROMPT, question, settings)
+    truncated = truncate_history(context.history, budget)
+
+    messages: list[dict] = []
+    for msg in truncated:
+        messages.append({
+            "role": msg["role"],
+            "content": [{"text": msg["content"]}],
+        })
+    messages.append({"role": "user", "content": [{"text": question}]})
     return _CHITCHAT_SYSTEM_PROMPT, messages
 
 
@@ -163,7 +177,7 @@ async def generate_response(
     - 스트리밍 완료 후 토큰 사용량을 PipelineContext.token_usage에 합산.
     """
     if context.intent == "chitchat":
-        system_prompt, messages = build_chitchat_messages(context)
+        system_prompt, messages = build_chitchat_messages(context, settings)
         model = "light"
         max_tokens = 256
     else:
