@@ -148,6 +148,29 @@ class TestEmbedRoundtrip:
         assert chunks_arg[1]["content"] == "제2조 내용"
         assert chunks_arg[1]["metadata"]["page"] == 2
 
+    async def test_enforcement_date_none_omits_metadata_key(self):
+        """enforcement_date=None일 때 metadata에 키 자체가 들어가지 않는다 (옵션 A)."""
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        supabase = _create_supabase()
+        request = EmbedRequest(
+            doc_id=1,
+            metadata=DocumentMetadata(
+                doc_name="test.pdf",
+                category="학사",
+                enforcement_date=None,
+            ),
+            chunks=[DocumentChunk(chunk_id=1, content="내용", page=1)],
+        )
+
+        await embed_document(request, settings, bedrock, supabase)
+
+        chunks_arg = supabase.insert_document_chunks.call_args[0][1]
+        assert "enforcement_date" not in chunks_arg[0]["metadata"]
+        assert chunks_arg[0]["metadata"]["doc_name"] == "test.pdf"
+        assert chunks_arg[0]["metadata"]["category"] == "학사"
+        assert chunks_arg[0]["metadata"]["page"] == 1
+
     @hyp_settings(max_examples=20)
     @given(
         content=st.text(min_size=1, max_size=200).filter(lambda x: x.strip()),
