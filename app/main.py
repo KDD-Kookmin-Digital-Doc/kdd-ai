@@ -82,6 +82,11 @@ API_DESCRIPTION = """
 
 def create_app() -> FastAPI:
     """FastAPI 앱 인스턴스를 생성하고 설정한다."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+
     app = FastAPI(
         title="학사규정 RAG AI 챗봇",
         description=API_DESCRIPTION,

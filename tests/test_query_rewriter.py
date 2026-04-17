@@ -11,7 +11,11 @@ from hypothesis import strategies as st
 
 from app.config import Settings
 from app.models.pipeline import PipelineContext, TokenUsage
-from app.pipeline.query_rewriter import _build_rewrite_messages, rewrite_query
+from app.pipeline.query_rewriter import (
+    _REWRITE_SYSTEM_PROMPT,
+    _build_rewrite_messages,
+    rewrite_query,
+)
 
 
 # ── 헬퍼 ──
@@ -244,3 +248,32 @@ class TestBuildRewriteMessages:
 
         assert "사용자: 사용자 메시지" in text
         assert "어시스턴트: 어시스턴트 메시지" in text
+
+
+class TestExclusionTransitionRule:
+    """배제·전환 의도 처리 규칙이 시스템 프롬프트에 포함되는지 검증 (Task 24.2)."""
+
+    def test_rule_text_present_in_system_prompt(self):
+        """시스템 프롬프트에 배제·전환 키워드와 처리 지시가 명시된다."""
+        assert "말고" in _REWRITE_SYSTEM_PROMPT
+        assert "대신" in _REWRITE_SYSTEM_PROMPT
+        assert "다른" in _REWRITE_SYSTEM_PROMPT
+        assert "배제" in _REWRITE_SYSTEM_PROMPT or "전환" in _REWRITE_SYSTEM_PROMPT
+        assert "이전 주제" in _REWRITE_SYSTEM_PROMPT
+
+    async def test_rule_passed_to_llm_on_exclusion_question(self):
+        """배제 의도 질문 호출 시 rewriter가 규칙을 포함한 system_prompt를 LLM에 전달한다."""
+        bedrock = _create_bedrock(rewritten="복학 신청 방법은?")
+        history = [
+            {"role": "user", "content": "휴학 신청 방법 알려줘"},
+            {"role": "assistant", "content": "학교 홈페이지에서 신청하세요."},
+        ]
+        ctx = _make_context(
+            question="그거 말고 복학은 어떻게 해?", history=history
+        )
+
+        await rewrite_query(ctx, bedrock)
+
+        system_prompt = bedrock.invoke_llm.call_args.kwargs["system_prompt"]
+        assert "말고" in system_prompt
+        assert "이전 주제" in system_prompt
