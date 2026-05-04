@@ -70,7 +70,7 @@ class BedrockClient:
         embedding_config = Config(
             region_name=settings.AWS_REGION,
             read_timeout=settings.BEDROCK_EMBEDDING_TIMEOUT,
-            connect_timeout=settings.BEDROCK_EMBEDDING_TIMEOUT,
+            connect_timeout=settings.BEDROCK_EMBEDDING_CONNECT_TIMEOUT,
             retries={"max_attempts": 0},
         )
 

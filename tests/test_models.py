@@ -44,7 +44,9 @@ class TestSettings:
         assert s.SIMILARITY_THRESHOLD == 0.75
         assert s.CACHE_SIMILARITY_THRESHOLD == 0.95
         assert s.BEDROCK_LLM_TIMEOUT == 30
-        assert s.BEDROCK_EMBEDDING_TIMEOUT == 15
+        assert s.BEDROCK_EMBEDDING_TIMEOUT == 30
+        assert s.BEDROCK_EMBEDDING_CONNECT_TIMEOUT == 10
+        assert s.EMBED_BATCH_SIZE == 48
         assert s.SUPABASE_TIMEOUT == 10
         assert s.CACHE_TTL_DAYS == 90
 
