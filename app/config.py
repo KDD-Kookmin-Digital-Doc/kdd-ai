@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     # 캐시 만료 정책
     CACHE_TTL_DAYS: int = 90
 
+    # 의도 분류 보조 컨텍스트 — BE가 history 최대 10턴까지 던지는 만큼 분류용으로도 넉넉히
+    # 너무 적으면 멀티턴 학사 후속 질문이 chitchat으로 빠질 수 있고,
+    # 너무 많으면 분류 LLM 입력 토큰이 커진다. 기본 6턴 = user/assistant 약 3쌍.
+    INTENT_HISTORY_TURNS: int = Field(default=6, gt=0)
+    # 분류 입력에 첨부할 history 메시지 1개의 최대 글자 수 (토큰 폭주 방지)
+    INTENT_HISTORY_CHARS_PER_TURN: int = Field(default=200, gt=0)
+
     # 타임아웃 (초)
     BEDROCK_LLM_TIMEOUT: int = 30
     BEDROCK_EMBEDDING_TIMEOUT: int = 30

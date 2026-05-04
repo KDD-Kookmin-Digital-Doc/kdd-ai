@@ -123,25 +123,69 @@ class TestRunPipeline:
             mock_intent.assert_not_called()
             mock_search.assert_not_called()
 
-    async def test_chitchat_skips_vector_search(self):
-        """잡담 분류 시 벡터 검색을 건너뛴다."""
+    async def test_chitchat_skips_rewrite_and_vector_search(self):
+        """잡담 분류 시 재작성과 벡터 검색을 모두 건너뛴다 (L안 핵심).
+
+        rewrite를 chitchat 경로에서도 호출하면 history 톤이 잡담을 학사 톤으로
+        비트는 회귀가 발생할 수 있어, classify가 chitchat을 내면 rewrite/search
+        둘 다 skip한다.
+        """
         settings = _create_settings()
         bedrock = _create_bedrock()
         supabase = _create_supabase()
 
-        async def _mock_classify(ctx, br):
+        async def _mock_classify(ctx, br, st):
             ctx.intent = "chitchat"
             return ctx
 
         request = _make_chat_request(is_first_message=False)
 
-        with patch("app.api.chat.classify_intent", side_effect=_mock_classify), \
+        with patch("app.api.chat.rewrite_query") as mock_rewrite, \
+             patch("app.api.chat.classify_intent", side_effect=_mock_classify), \
              patch("app.api.chat.search_documents") as mock_search:
 
             context = await _run_pipeline(request, bedrock, supabase, settings)
 
             assert context.intent == "chitchat"
+            mock_rewrite.assert_not_called()
             mock_search.assert_not_called()
+
+    async def test_academic_pipeline_call_order(self):
+        """학사 경로 호출 순서: classify → rewrite → search (L안 핵심).
+
+        classify_intent가 rewrite보다 먼저 실행돼야 history 톤이 잡담을
+        학사 톤으로 비트는 회귀를 차단할 수 있다.
+        """
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        supabase = _create_supabase()
+
+        call_order: list[str] = []
+
+        async def _mock_classify(ctx, br, st):
+            call_order.append("classify")
+            ctx.intent = "academic"
+            return ctx
+
+        async def _mock_rewrite(ctx, br):
+            call_order.append("rewrite")
+            ctx.rewritten_question = ctx.original_question
+            return ctx
+
+        async def _mock_search(ctx, br, sb, st):
+            call_order.append("search")
+            ctx.search_results = [_make_search_result()]
+            return ctx
+
+        request = _make_chat_request(is_first_message=False)
+
+        with patch("app.api.chat.classify_intent", side_effect=_mock_classify), \
+             patch("app.api.chat.rewrite_query", side_effect=_mock_rewrite), \
+             patch("app.api.chat.search_documents", side_effect=_mock_search):
+
+            await _run_pipeline(request, bedrock, supabase, settings)
+
+        assert call_order == ["classify", "rewrite", "search"]
 
     async def test_full_academic_pipeline(self):
         """학사규정 경로: 캐시미스 → 재작성 → 의도분류 → 벡터검색 전체 실행."""
@@ -153,7 +197,7 @@ class TestRunPipeline:
             ctx.rewritten_question = ctx.original_question
             return ctx
 
-        async def _mock_classify(ctx, br):
+        async def _mock_classify(ctx, br, st):
             ctx.intent = "academic"
             return ctx
 
@@ -193,7 +237,7 @@ class TestRunPipeline:
             ctx.rewritten_question = ctx.original_question
             return ctx
 
-        async def _mock_classify(ctx, br):
+        async def _mock_classify(ctx, br, st):
             ctx.intent = "academic"
             return ctx
 
@@ -398,7 +442,7 @@ class TestErrorPropagation:
             ctx.rewritten_question = ctx.original_question
             return ctx
 
-        async def _mock_classify(ctx, br):
+        async def _mock_classify(ctx, br, st):
             ctx.intent = "academic"
             return ctx
 
@@ -459,7 +503,7 @@ class TestPipelineDeterminism:
                 ctx.rewritten_question = ctx.original_question
                 return ctx
 
-            async def _mock_classify(ctx, br, _intent=intent):
+            async def _mock_classify(ctx, br, st, _intent=intent):
                 ctx.intent = _intent
                 return ctx
 

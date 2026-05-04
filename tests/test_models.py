@@ -47,6 +47,8 @@ class TestSettings:
         assert s.BEDROCK_EMBEDDING_TIMEOUT == 30
         assert s.BEDROCK_EMBEDDING_CONNECT_TIMEOUT == 10
         assert s.EMBED_BATCH_SIZE == 48
+        assert s.INTENT_HISTORY_TURNS == 6
+        assert s.INTENT_HISTORY_CHARS_PER_TURN == 200
         assert s.SUPABASE_TIMEOUT == 10
         assert s.CACHE_TTL_DAYS == 90
 
