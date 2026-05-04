@@ -238,8 +238,12 @@ class TestBuildAcademicMessages:
         assert "enforcement_date" in system_prompt
         assert "최근" in system_prompt
 
-    def test_question_in_messages(self):
-        """재작성된 질문이 마지막 메시지로 포함된다."""
+    def test_last_user_message_uses_original_not_rewritten(self):
+        """옵션 B: messages의 마지막 user 메시지는 원문이지 재작성된 질문이 아니다.
+
+        rewritten은 system prompt의 "## 사용자의 현재 질문" 섹션에 별도 배치되어
+        멀티턴에서 LLM이 "이전 답변 재사용" 명목으로 톤을 잡지 않게 한다.
+        """
         settings = _create_settings()
         ctx = _make_context(
             question="원본",
@@ -247,11 +251,47 @@ class TestBuildAcademicMessages:
             search_results=[_make_search_result()],
         )
 
-        _, messages = build_academic_messages(ctx, settings)
+        system_prompt, messages = build_academic_messages(ctx, settings)
 
         last_msg = messages[-1]
         assert last_msg["role"] == "user"
-        assert last_msg["content"][0]["text"] == "재작성된 질문"
+        assert last_msg["content"][0]["text"] == "원본"
+        # rewritten은 system prompt에 별도 섹션으로 들어가야 함
+        assert "## 사용자의 현재 질문 (재작성됨)" in system_prompt
+        assert "재작성된 질문" in system_prompt
+        assert "원문: 원본" in system_prompt
+
+    def test_current_question_section_without_rewrite(self):
+        """rewritten이 None이거나 original과 같으면 "(재작성됨)" 라벨 없이 단순 표시."""
+        settings = _create_settings()
+        ctx = _make_context(
+            question="휴학 신청 방법은?",
+            rewritten=None,
+            search_results=[_make_search_result()],
+        )
+
+        system_prompt, messages = build_academic_messages(ctx, settings)
+
+        assert "## 사용자의 현재 질문" in system_prompt
+        assert "(재작성됨)" not in system_prompt
+        assert "원문:" not in system_prompt
+        assert "휴학 신청 방법은?" in system_prompt
+        # last user는 원본
+        assert messages[-1]["content"][0]["text"] == "휴학 신청 방법은?"
+
+    def test_current_question_section_skips_dup_when_rewritten_equals_original(self):
+        """rewritten이 original과 같으면 "(재작성됨)" 표시 없이 단일 표시."""
+        settings = _create_settings()
+        ctx = _make_context(
+            question="휴학",
+            rewritten="휴학",
+            search_results=[_make_search_result()],
+        )
+
+        system_prompt, _ = build_academic_messages(ctx, settings)
+
+        assert "(재작성됨)" not in system_prompt
+        assert "원문:" not in system_prompt
 
     def test_history_included_in_messages(self):
         """history가 메시지 배열에 포함된다."""
