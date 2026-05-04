@@ -64,15 +64,15 @@ async def _run_pipeline(
     if context.cache_hit:
         return context
 
-    # 2. 질문 재작성
-    context = await rewrite_query(context, bedrock)
+    # 2. 의도 분류 (rewrite 이전 — history 톤이 잡담을 학사로 비트는 것을 차단)
+    context = await classify_intent(context, bedrock, settings)
 
-    # 3. 의도 분류
-    context = await classify_intent(context, bedrock)
-
-    # 4. 잡담이면 벡터 검색 우회
+    # 3. 잡담이면 rewrite·벡터 검색 모두 우회
     if context.intent == "chitchat":
         return context
+
+    # 4. 질문 재작성 (academic 경로에서만)
+    context = await rewrite_query(context, bedrock)
 
     # 5. 벡터 검색
     context = await search_documents(context, bedrock, supabase, settings)
@@ -172,8 +172,8 @@ async def _save_answer_cache(
         "학사규정 RAG 파이프라인을 실행하고 **SSE(Server-Sent Events)** 스트림으로 답변을 반환합니다.\n\n"
         "### 파이프라인 단계\n"
         "1. 시맨틱 캐시 조회 (`is_first_message=true`인 경우)\n"
-        "2. 질문 재작성 (히스토리 기반 문맥화)\n"
-        "3. 의도 분류 (`academic` / `chitchat`)\n"
+        "2. 의도 분류 (`academic` / `chitchat`) — history 톤이 분류를 비트는 것을 막기 위해 rewrite 이전에 수행\n"
+        "3. 질문 재작성 (academic 경로에서만, 히스토리 기반 문맥화)\n"
         "4. 벡터 검색 (academic 인 경우)\n"
         "5. LLM 스트리밍 답변 생성\n\n"
         "### SSE 이벤트 포맷\n"
