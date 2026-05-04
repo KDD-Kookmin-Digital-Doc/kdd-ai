@@ -66,6 +66,16 @@ class TestSettings:
         assert s.SIMILARITY_THRESHOLD == 0.8
         assert s.EMBEDDING_DIMENSION == 512
 
+    def test_embed_batch_size_must_be_positive(self, monkeypatch):
+        """EMBED_BATCH_SIZE=0 또는 음수면 Settings 생성이 실패한다 (fail-fast)."""
+        monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+        monkeypatch.setenv("SUPABASE_KEY", "test-key")
+
+        for bad_value in ("0", "-1"):
+            monkeypatch.setenv("EMBED_BATCH_SIZE", bad_value)
+            with pytest.raises(ValidationError):
+                Settings(_env_file=None)
+
 
 # ── Schema Tests ──
 
