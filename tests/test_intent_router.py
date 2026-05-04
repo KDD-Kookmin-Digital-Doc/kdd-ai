@@ -22,7 +22,8 @@ def _create_settings(**overrides: str) -> Settings:
         "SUPABASE_KEY": "test-key",
         **overrides,
     }
-    with patch.dict(os.environ, env):
+    # clear=True: CI/로컬 셸에 남아있는 INTENT_HISTORY_* 등이 테스트로 새는 것을 차단
+    with patch.dict(os.environ, env, clear=True):
         return Settings(_env_file=None)
 
 
