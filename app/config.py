@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     EMBEDDING_DIMENSION: int = 1024
     LLM_CONTEXT_WINDOW: int = 200000
     LLM_MAX_TOKENS: int = 1024
+    # 문서 적재 시 한 번의 Bedrock embed 호출에 묶을 청크 수
+    # (Cohere v4 read_timeout 초과 회피 + Throttling 균형). 양수 강제.
+    EMBED_BATCH_SIZE: int = Field(default=48, gt=0)
 
     # Supabase 설정
     SUPABASE_URL: str
@@ -58,7 +61,9 @@ class Settings(BaseSettings):
 
     # 타임아웃 (초)
     BEDROCK_LLM_TIMEOUT: int = 30
-    BEDROCK_EMBEDDING_TIMEOUT: int = 15
+    BEDROCK_EMBEDDING_TIMEOUT: int = 30
+    # 임베딩 connect 타임아웃 (read와 분리 — connect 실패는 빠르게 감지)
+    BEDROCK_EMBEDDING_CONNECT_TIMEOUT: int = 10
     SUPABASE_TIMEOUT: int = 10
 
 

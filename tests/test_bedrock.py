@@ -309,3 +309,44 @@ class TestHealthCheck:
         )
 
         assert await bedrock_client.health_check_embedding() is False
+
+
+# ── 클라이언트 초기화 (타임아웃 분리) ──
+
+
+class TestClientInitialization:
+    """임베딩 boto Config의 read/connect 타임아웃이 분리 적용되는지."""
+
+    def test_embedding_read_and_connect_timeout_separated(self, monkeypatch):
+        monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+        monkeypatch.setenv("SUPABASE_KEY", "test-key")
+        monkeypatch.setenv("BEDROCK_EMBEDDING_TIMEOUT", "30")
+        monkeypatch.setenv("BEDROCK_EMBEDDING_CONNECT_TIMEOUT", "10")
+        settings = Settings(_env_file=None)
+
+        with patch("app.clients.bedrock.boto3.client") as mock_client:
+            BedrockClient(settings)
+
+        # boto3.client가 LLM, 임베딩용으로 두 번 호출됨
+        assert mock_client.call_count == 2
+        embedding_call = mock_client.call_args_list[1]
+        embedding_config = embedding_call.kwargs["config"]
+
+        assert embedding_config.read_timeout == 30
+        assert embedding_config.connect_timeout == 10
+
+    def test_llm_timeout_unchanged_by_embedding_split(self, monkeypatch):
+        """LLM 클라이언트는 read=connect로 통합 유지."""
+        monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+        monkeypatch.setenv("SUPABASE_KEY", "test-key")
+        monkeypatch.setenv("BEDROCK_LLM_TIMEOUT", "45")
+        settings = Settings(_env_file=None)
+
+        with patch("app.clients.bedrock.boto3.client") as mock_client:
+            BedrockClient(settings)
+
+        llm_call = mock_client.call_args_list[0]
+        llm_config = llm_call.kwargs["config"]
+
+        assert llm_config.read_timeout == 45
+        assert llm_config.connect_timeout == 45

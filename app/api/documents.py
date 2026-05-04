@@ -16,8 +16,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-EMBED_BATCH_SIZE = 96
-
 
 @router.post(
     "/api/documents/embed",
@@ -78,8 +76,9 @@ async def embed_document(
     embedded_chunks: list[dict] = []
     failed_chunks: list[dict] = []
 
-    for batch_start in range(0, len(request.chunks), EMBED_BATCH_SIZE):
-        batch = request.chunks[batch_start : batch_start + EMBED_BATCH_SIZE]
+    batch_size = settings.EMBED_BATCH_SIZE
+    for batch_start in range(0, len(request.chunks), batch_size):
+        batch = request.chunks[batch_start : batch_start + batch_size]
         try:
             embeddings = await bedrock.embed_texts(
                 [c.content for c in batch], input_type="search_document"

@@ -44,7 +44,9 @@ class TestSettings:
         assert s.SIMILARITY_THRESHOLD == 0.75
         assert s.CACHE_SIMILARITY_THRESHOLD == 0.95
         assert s.BEDROCK_LLM_TIMEOUT == 30
-        assert s.BEDROCK_EMBEDDING_TIMEOUT == 15
+        assert s.BEDROCK_EMBEDDING_TIMEOUT == 30
+        assert s.BEDROCK_EMBEDDING_CONNECT_TIMEOUT == 10
+        assert s.EMBED_BATCH_SIZE == 48
         assert s.SUPABASE_TIMEOUT == 10
         assert s.CACHE_TTL_DAYS == 90
 
@@ -63,6 +65,16 @@ class TestSettings:
         assert s.SUPABASE_URL == "https://custom.supabase.co"
         assert s.SIMILARITY_THRESHOLD == 0.8
         assert s.EMBEDDING_DIMENSION == 512
+
+    def test_embed_batch_size_must_be_positive(self, monkeypatch):
+        """EMBED_BATCH_SIZE=0 또는 음수면 Settings 생성이 실패한다 (fail-fast)."""
+        monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+        monkeypatch.setenv("SUPABASE_KEY", "test-key")
+
+        for bad_value in ("0", "-1"):
+            monkeypatch.setenv("EMBED_BATCH_SIZE", bad_value)
+            with pytest.raises(ValidationError):
+                Settings(_env_file=None)
 
 
 # ── Schema Tests ──
