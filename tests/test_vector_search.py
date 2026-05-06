@@ -281,3 +281,99 @@ class TestSearchDocumentsUnit:
         result = await search_documents(ctx, bedrock, supabase, settings)
 
         assert result.suggested_questions == []
+
+
+# ── Task 16: 임베딩 재사용 ──
+
+
+class TestEmbeddingReuse:
+    """semantic_cache가 미리 임베딩한 결과를 vector_search에서 재사용 (텍스트 일치 시)."""
+
+    async def test_reuses_embedding_when_text_matches(self):
+        """rewrite 미발생 + context.embedded_question_text == question → embed_texts 호출 X."""
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        supabase = _create_supabase(
+            search_results=[_make_search_result()],
+        )
+
+        cached_embedding = [0.42] * 1024
+        ctx = _make_context(question="휴학 기간은?", rewritten=None)
+        ctx.question_embedding = cached_embedding
+        ctx.embedded_question_text = "휴학 기간은?"
+        ctx.embedded_question_input_type = "search_query"
+
+        await search_documents(ctx, bedrock, supabase, settings)
+
+        bedrock.embed_texts.assert_not_called()
+        # 검색에는 캐시된 임베딩이 그대로 사용됨
+        call_kwargs = supabase.search_documents.call_args
+        assert call_kwargs.kwargs["embedding"] == cached_embedding
+
+    async def test_creates_new_embedding_when_input_type_mismatch(self):
+        """input_type 이 search_query 가 아니면 새로 호출 (silent degradation 가드)."""
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        supabase = _create_supabase()
+
+        ctx = _make_context(question="질문", rewritten=None)
+        ctx.question_embedding = [0.42] * 1024
+        ctx.embedded_question_text = "질문"
+        ctx.embedded_question_input_type = "search_document"  # ← 잘못 set된 케이스
+
+        await search_documents(ctx, bedrock, supabase, settings)
+
+        # input_type mismatch → 재사용 거부, 새로 호출
+        bedrock.embed_texts.assert_called_once_with(
+            ["질문"], input_type="search_query"
+        )
+
+    async def test_creates_new_embedding_when_rewrite_changes_text(self):
+        """rewrite로 텍스트가 달라지면 새로 임베딩한다 (의미 다른 텍스트는 재사용 X)."""
+        settings = _create_settings()
+        bedrock = _create_bedrock(embedding=[0.99] * 1024)
+        supabase = _create_supabase()
+
+        ctx = _make_context(question="그건 뭐야?", rewritten="휴학 기간은 얼마인가요?")
+        ctx.question_embedding = [0.42] * 1024
+        ctx.embedded_question_text = "그건 뭐야?"  # original 측만 임베딩됨
+
+        await search_documents(ctx, bedrock, supabase, settings)
+
+        # rewritten으로 새로 임베딩 (search_query input_type 유지)
+        bedrock.embed_texts.assert_called_once_with(
+            ["휴학 기간은 얼마인가요?"], input_type="search_query"
+        )
+
+    async def test_creates_new_embedding_when_no_cache(self):
+        """context.question_embedding이 None이면 새로 임베딩 (멀티턴: cache 단계 skip)."""
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        supabase = _create_supabase()
+
+        ctx = _make_context(question="멀티턴 질문")
+        # question_embedding은 기본값 None
+        assert ctx.question_embedding is None
+
+        await search_documents(ctx, bedrock, supabase, settings)
+
+        bedrock.embed_texts.assert_called_once_with(
+            ["멀티턴 질문"], input_type="search_query"
+        )
+
+    async def test_does_not_overwrite_cached_embedding(self):
+        """vector_search는 context.question_embedding을 갱신하지 않는다 (read-only invariant)."""
+        settings = _create_settings()
+        bedrock = _create_bedrock(embedding=[0.99] * 1024)
+        supabase = _create_supabase()
+
+        original_embedding = [0.42] * 1024
+        ctx = _make_context(question="원본", rewritten="재작성됨")
+        ctx.question_embedding = original_embedding
+        ctx.embedded_question_text = "원본"
+
+        await search_documents(ctx, bedrock, supabase, settings)
+
+        # rewrite 분기에서 새 임베딩을 만들었지만 컨텍스트는 그대로
+        assert ctx.question_embedding is original_embedding
+        assert ctx.embedded_question_text == "원본"

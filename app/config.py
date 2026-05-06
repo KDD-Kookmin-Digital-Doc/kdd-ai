@@ -73,6 +73,24 @@ class Settings(BaseSettings):
     BEDROCK_EMBEDDING_CONNECT_TIMEOUT: int = 10
     SUPABASE_TIMEOUT: int = 10
 
+    # 로깅 레벨 (DEBUG/INFO/WARNING/ERROR/CRITICAL).
+    # 알파테스트 동안엔 DEBUG 권장 (임베딩 재사용 등 최적화 효과 검증용),
+    # 운영 안정화 후 INFO로 복귀해 노이즈 정리.
+    LOG_LEVEL: str = "INFO"
+
+    @model_validator(mode="after")
+    def _validate_log_level(self) -> "Settings":
+        valid = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        normalized = self.LOG_LEVEL.upper()
+        if normalized not in valid:
+            raise ValueError(
+                f"LOG_LEVEL 값이 유효하지 않습니다: {self.LOG_LEVEL!r}. "
+                f"허용값: {sorted(valid)}"
+            )
+        # 정규화된 값으로 일관 유지 (대소문자 혼재 방지)
+        object.__setattr__(self, "LOG_LEVEL", normalized)
+        return self
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -280,3 +280,95 @@ class TestCheckCacheUnit:
         assert result.cached_sources[2].doc_id == 2
         assert result.cached_sources[2].doc_name == "학칙.pdf"
         assert result.cached_sources[2].page == 10
+
+
+# ── Task 16: 임베딩 컨텍스트 캐싱 ──
+
+
+class TestEmbeddingCaching:
+    """check_cache가 임베딩 직후 PipelineContext에 결과를 보관해 하위 단계가 재사용하도록."""
+
+    async def test_caches_embedding_on_miss(
+        self, mock_settings, mock_bedrock, mock_supabase
+    ):
+        """캐시 미스 시 question_embedding과 embedded_question_text가 컨텍스트에 저장된다."""
+        cached_embedding = [0.42] * 1024
+        mock_bedrock.embed_texts.return_value = [cached_embedding]
+        mock_supabase.search_answer_cache.return_value = None
+
+        ctx = _make_context("질문")
+        result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+
+        assert result.question_embedding == cached_embedding
+        assert result.embedded_question_text == "질문"
+
+    async def test_caches_embedding_on_hit(
+        self, mock_settings, mock_bedrock, mock_supabase
+    ):
+        """캐시 히트 시에도 동일하게 보관 (일관성)."""
+        cached_embedding = [0.42] * 1024
+        mock_bedrock.embed_texts.return_value = [cached_embedding]
+        mock_supabase.search_answer_cache.return_value = _make_cache_match()
+
+        ctx = _make_context("질문")
+        result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+
+        assert result.cache_hit is True
+        assert result.question_embedding == cached_embedding
+        assert result.embedded_question_text == "질문"
+
+    async def test_does_not_cache_when_skipped(
+        self, mock_settings, mock_bedrock, mock_supabase
+    ):
+        """is_first_message=False (멀티턴) 일 때는 임베딩 자체를 안 하므로 None 유지."""
+        ctx = _make_context("멀티턴 질문")
+        result = await check_cache(ctx, False, mock_bedrock, mock_supabase, mock_settings)
+
+        mock_bedrock.embed_texts.assert_not_called()
+        assert result.question_embedding is None
+        assert result.embedded_question_text is None
+
+    async def test_does_not_cache_on_embed_error(
+        self, mock_settings, mock_bedrock, mock_supabase
+    ):
+        """embed_texts 실패 시 컨텍스트가 None 유지 (graceful degradation 후 새로 시도 가능)."""
+        mock_bedrock.embed_texts.side_effect = RuntimeError("Bedrock 실패")
+
+        ctx = _make_context("질문")
+        result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+
+        assert result.question_embedding is None
+        assert result.embedded_question_text is None
+        assert result.embedded_question_input_type is None
+
+    async def test_caches_input_type_with_embedding(
+        self, mock_settings, mock_bedrock, mock_supabase
+    ):
+        """input_type 도 함께 보관 (silent quality degradation 가드)."""
+        mock_supabase.search_answer_cache.return_value = None
+
+        ctx = _make_context("질문")
+        result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+
+        assert result.embedded_question_input_type == "search_query"
+
+    async def test_preserves_embedding_on_supabase_error(
+        self, mock_settings, mock_bedrock, mock_supabase
+    ):
+        """Supabase 실패 시에도 question_embedding 은 보존 (embed 후에 실패했으므로).
+
+        하위 단계(vector_search) 가 cache 가 못 한 일을 마저 할 수 있도록 컨텍스트는
+        살려둔다. 누군가 except 블록에서 reset 해버리면 silent regression 이라 lock down.
+        """
+        cached_embedding = [0.42] * 1024
+        mock_bedrock.embed_texts.return_value = [cached_embedding]
+        mock_supabase.search_answer_cache.side_effect = RuntimeError("DB 실패")
+
+        ctx = _make_context("질문")
+        result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+
+        assert result.cache_hit is False
+        # 임베딩은 이미 만들어졌으니 보존되어야 함
+        assert result.question_embedding == cached_embedding
+        assert result.embedded_question_text == "질문"
+        assert result.embedded_question_input_type == "search_query"

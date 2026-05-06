@@ -36,6 +36,19 @@ async def check_cache(
         )
         question_embedding = embeddings[0]
 
+        # Task 16: 임베딩 재사용을 위해 컨텍스트에 보관 (cache hit/miss 무관).
+        # vector_search / _save_answer_cache 가 텍스트 + input_type 일치 시 재사용.
+        # input_type 도 함께 저장해 미래에 cache 측 input_type 이 바뀌어도
+        # 하위 단계가 silent 하게 잘못 재사용하지 않도록 가드.
+        context.question_embedding = question_embedding
+        context.embedded_question_text = context.original_question
+        context.embedded_question_input_type = "search_query"
+        logger.debug(
+            "질문 임베딩 컨텍스트 보관: text=%r, input_type=%s",
+            context.original_question,
+            "search_query",
+        )
+
         cache_match = await supabase.search_answer_cache(
             embedding=question_embedding,
             threshold=settings.CACHE_SIMILARITY_THRESHOLD,

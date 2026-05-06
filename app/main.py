@@ -82,8 +82,9 @@ API_DESCRIPTION = """
 
 def create_app() -> FastAPI:
     """FastAPI 앱 인스턴스를 생성하고 설정한다."""
+    settings = get_settings()
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     )
 
@@ -120,7 +121,6 @@ def create_app() -> FastAPI:
     register_error_handlers(app)
 
     # CORS 미들웨어 (CORS_ORIGINS 환경변수 설정 시에만 활성화)
-    settings = get_settings()
     if settings.CORS_ORIGINS:
         app.add_middleware(
             CORSMiddleware,

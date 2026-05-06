@@ -20,17 +20,29 @@ async def search_documents(
 ) -> PipelineContext:
     """질문을 임베딩하여 벡터 검색을 수행하고 PipelineContext를 갱신한다.
 
-    - 재작성된 질문(또는 원본)을 Cohere Embed v3로 1024차원 벡터로 변환.
+    - 재작성된 질문(또는 원본)을 Cohere Embed로 1024차원 벡터로 변환.
     - documents 테이블에서 코사인 유사도 기반 상위 5개 검색.
     - 유사도 임계값 이상 문서가 1개 이상 → search_results, source_docs 설정.
     - 모든 문서가 임계값 미만 → Fallback: answer_cache에서 유사 질문 3개 추출.
     """
     question = context.rewritten_question or context.original_question
 
-    embeddings = await bedrock.embed_texts(
-        [question], input_type="search_query"
-    )
-    question_embedding = embeddings[0]
+    # Task 16: semantic_cache가 미리 임베딩한 결과를 텍스트 + input_type 일치 시 재사용.
+    # rewrite로 텍스트가 달라졌거나 cache 단계 자체를 skip(멀티턴)했을 때만 새로 호출.
+    # input_type 까지 비교해 미래에 cache 측 input_type 이 바뀌어도 silent quality
+    # degradation 이 발생하지 않도록 가드.
+    if (
+        context.question_embedding is not None
+        and context.embedded_question_text == question
+        and context.embedded_question_input_type == "search_query"
+    ):
+        question_embedding = context.question_embedding
+        logger.debug("임베딩 재사용 (텍스트 일치): %r", question)
+    else:
+        embeddings = await bedrock.embed_texts(
+            [question], input_type="search_query"
+        )
+        question_embedding = embeddings[0]
 
     results = await supabase.search_documents(
         embedding=question_embedding,
