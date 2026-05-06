@@ -51,6 +51,23 @@ class TestSettings:
         assert s.INTENT_HISTORY_CHARS_PER_TURN == 200
         assert s.SUPABASE_TIMEOUT == 10
         assert s.CACHE_TTL_DAYS == 90
+        assert s.LOG_LEVEL == "INFO"
+
+    def test_log_level_normalized_to_upper(self, monkeypatch):
+        """LOG_LEVEL 은 대소문자 무관하게 받아들여 대문자로 정규화된다."""
+        monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+        monkeypatch.setenv("SUPABASE_KEY", "test-key")
+        monkeypatch.setenv("LOG_LEVEL", "debug")
+        s = Settings(_env_file=None)
+        assert s.LOG_LEVEL == "DEBUG"
+
+    def test_log_level_invalid_rejected(self, monkeypatch):
+        """알 수 없는 LOG_LEVEL 은 ValidationError."""
+        monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+        monkeypatch.setenv("SUPABASE_KEY", "test-key")
+        monkeypatch.setenv("LOG_LEVEL", "VERBOSE")
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None)
 
     def test_required_fields_missing(self, monkeypatch):
         monkeypatch.delenv("SUPABASE_URL", raising=False)
