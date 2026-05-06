@@ -141,9 +141,20 @@ async def _save_answer_cache(
     """답변 캐시를 비동기로 저장한다. 실패 시 로그만 남긴다."""
     try:
         full_answer = "".join(answer_parts)
-        embeddings = await bedrock.embed_texts(
-            [context.original_question], input_type="search_query"
-        )
+        # Task 16: semantic_cache가 original_question을 search_query로 임베딩한 결과를 재사용.
+        # vector_search가 rewrite 분기에서 새 임베딩을 만들어도 context.question_embedding은
+        # 갱신되지 않으므로 여기서도 original 측 임베딩이 안전하게 유지됨.
+        if (
+            context.question_embedding is not None
+            and context.embedded_question_text == context.original_question
+        ):
+            question_embedding = context.question_embedding
+        else:
+            embeddings = await bedrock.embed_texts(
+                [context.original_question], input_type="search_query"
+            )
+            question_embedding = embeddings[0]
+
         source_doc_ids = list({r.doc_id for r in (context.search_results or [])})
         sources = [
             {"doc_id": s.doc_id, "chunk_id": s.chunk_id, "doc_name": s.doc_name, "page": s.page}
@@ -152,7 +163,7 @@ async def _save_answer_cache(
 
         cache = AnswerCache(
             question=context.original_question,
-            embedding=embeddings[0],
+            embedding=question_embedding,
             answer=full_answer,
             source_doc_ids=source_doc_ids,
             sources=sources,
