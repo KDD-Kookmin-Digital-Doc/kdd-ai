@@ -500,12 +500,11 @@ class TestUpsertAnswerCache:
         )
         await client.upsert_answer_cache(cache)
 
-        # .table("answer_cache").insert(...) 패턴이 호출되지 않음
-        # (호출자는 mock_sb.rpc 만 사용)
-        # mock_sb.table 은 다른 메서드(invalidate 등)에서도 쓰일 수 있어 호출 자체는 막지 않음.
-        # 핵심은 답변 캐시 저장이 RPC 로 처리됨.
+        # 외부 리뷰 Nit 9: RPC 호출됐는지 + .table().insert() 체인 미호출 둘 다 lock.
         mock_sb.rpc.assert_called_once()
         assert mock_sb.rpc.call_args[0][0] == "upsert_answer_cache"
+        # .table("answer_cache").insert(...) 체인 자체가 발동되지 않음을 직접 검증
+        assert not mock_sb.table.return_value.insert.called
 
 
 # ── health_check 테스트 ──
