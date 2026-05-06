@@ -113,6 +113,25 @@ class TestUserContextInPrompt:
 
         assert user_context in system_prompt
 
+    async def test_academic_prompt_contains_pii_inline_guard(self):
+        """이슈 #53 옵션 C: user_context 식별 정보를 답변 본문에 인용 금지 가드가 포함된다.
+
+        cross-user 시맨틱 캐시 누설 방어 — LLM이 학번·이름·학과를 답변 본문에
+        그대로 적지 않도록 system prompt에 가드 한 줄을 명시했는지 회귀 검증.
+        """
+        settings = _create_settings()
+        ctx = _make_context(
+            user_context="컴퓨터공학과 2024학번 학부생",
+            search_results=[_make_search_result()],
+        )
+
+        system_prompt, _ = build_academic_messages(ctx, settings)
+
+        # 가드 문구의 핵심 키워드가 모두 포함되는지
+        assert "답변 본문에 인용" in system_prompt
+        assert "학번" in system_prompt
+        assert "본인의 학번에 해당하는 규정" in system_prompt
+
     @hyp_settings(max_examples=50)
     @given(
         user_context=st.text(min_size=1, max_size=100).filter(lambda x: x.strip()),
