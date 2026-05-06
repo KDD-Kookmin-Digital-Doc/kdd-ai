@@ -14,6 +14,7 @@ from app.api.dependencies import get_bedrock_client, get_supabase_client
 from app.clients.bedrock import BedrockClient
 from app.clients.supabase_client import SupabaseVectorClient
 from app.config import Settings, get_settings
+from app.logging_context import set_session_id
 from app.models.pipeline import AnswerCache, PipelineContext
 from app.models.schemas import ChatRequest, ErrorResponse
 from app.pipeline.intent_router import classify_intent
@@ -51,6 +52,7 @@ async def _run_pipeline(
     context = PipelineContext(
         original_question=request.message,
         user_context=request.user_context,
+        session_id=request.session_id,
         history=[
             {"role": m.role, "content": m.content}
             for m in request.history
@@ -233,6 +235,10 @@ async def chat(
     supabase: SupabaseVectorClient = Depends(get_supabase_client),
 ) -> StreamingResponse:
     """RAG 챗봇 대화 엔드포인트. SSE 스트리밍 응답을 반환한다."""
+    # PR-50: contextvars 에 session_id 설정. 같은 task 내 모든 sub-coroutine 과
+    # asyncio.create_task 로 분기되는 _save_answer_cache 까지 자동 전파.
+    # FastAPI 는 요청마다 새 task 를 만들므로 reset 없이도 다른 요청과 격리됨.
+    set_session_id(request.session_id)
     context = await _run_pipeline(request, bedrock, supabase, settings)
 
     return StreamingResponse(

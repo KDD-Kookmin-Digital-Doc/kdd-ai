@@ -13,6 +13,7 @@ from app.api.chat import wait_pending_cache_writes
 from app.api.dependencies import get_bedrock_client, get_supabase_client
 from app.api.error_handlers import register_error_handlers
 from app.config import get_settings
+from app.logging_context import SessionIdFilter
 from app.startup import validate_startup
 
 logger = logging.getLogger(__name__)
@@ -85,8 +86,13 @@ def create_app() -> FastAPI:
     settings = get_settings()
     logging.basicConfig(
         level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        format="%(asctime)s %(levelname)s [%(name)s][session=%(session_id)s] %(message)s",
     )
+    # 모든 핸들러에 SessionIdFilter 부착 — 모든 LogRecord 에 session_id 자동 첨부 (이슈 #50).
+    # default="-" 라 startup/lifespan 시점 로그도 안전하게 출력됨.
+    session_filter = SessionIdFilter()
+    for handler in logging.root.handlers:
+        handler.addFilter(session_filter)
 
     app = FastAPI(
         title="학사규정 RAG AI 챗봇",
