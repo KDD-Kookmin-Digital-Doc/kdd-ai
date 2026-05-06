@@ -37,6 +37,18 @@ class Settings(BaseSettings):
     # 유사도 임계값
     SIMILARITY_THRESHOLD: float = 0.75
     CACHE_SIMILARITY_THRESHOLD: float = 0.95
+    # 벡터 검색 폴백(answer_cache 유사 질문 추출)에 적용할 floor 임계값.
+    # 너무 낮으면 무관한 질문이 fallback 으로 노출됨 (이슈 #46).
+    FALLBACK_SIMILARITY_THRESHOLD: float = 0.5
+
+    # 검색/LLM 매직넘버 (PR-R5)
+    VECTOR_SEARCH_TOP_K: int = Field(default=5, gt=0)
+    FALLBACK_SUGGESTED_COUNT: int = Field(default=3, gt=0)
+    REWRITE_MAX_TOKENS: int = Field(default=512, gt=0)
+    INTENT_MAX_TOKENS: int = Field(default=16, gt=0)
+    CHITCHAT_MAX_TOKENS: int = Field(default=256, gt=0)
+    FAQ_LLM_MAX_TOKENS: int = Field(default=512, gt=0)
+    BEDROCK_MAX_RETRIES: int = Field(default=2, ge=0)
 
     # confidence 임계값
     CONFIDENCE_HIGH_THRESHOLD: float = 0.9
