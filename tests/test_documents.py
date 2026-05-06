@@ -52,10 +52,10 @@ def _create_supabase(inserted_count: int | None = None) -> AsyncMock:
     supabase.delete_document_chunks.return_value = 0
     supabase.invalidate_cache_by_doc_id.return_value = 0
     if inserted_count is not None:
-        supabase.insert_document_chunks.return_value = inserted_count
+        supabase.replace_document_chunks.return_value = inserted_count
     else:
         # 기본: 전달된 chunks 수만큼 반환
-        supabase.insert_document_chunks.side_effect = (
+        supabase.replace_document_chunks.side_effect = (
             lambda doc_id, chunks: len(chunks)
         )
     return supabase
@@ -135,7 +135,7 @@ class TestEmbedRoundtrip:
 
         await embed_document(request, settings, bedrock, supabase)
 
-        call_args = supabase.insert_document_chunks.call_args
+        call_args = supabase.replace_document_chunks.call_args
         doc_id_arg = call_args[0][0]
         chunks_arg = call_args[0][1]
 
@@ -165,7 +165,7 @@ class TestEmbedRoundtrip:
 
         await embed_document(request, settings, bedrock, supabase)
 
-        chunks_arg = supabase.insert_document_chunks.call_args[0][1]
+        chunks_arg = supabase.replace_document_chunks.call_args[0][1]
         assert "enforcement_date" not in chunks_arg[0]["metadata"]
         assert chunks_arg[0]["metadata"]["doc_name"] == "test.pdf"
         assert chunks_arg[0]["metadata"]["category"] == "학사"
@@ -194,7 +194,7 @@ class TestEmbedRoundtrip:
 
         await embed_document(request, settings, bedrock, supabase)
 
-        chunks_arg = supabase.insert_document_chunks.call_args[0][1]
+        chunks_arg = supabase.replace_document_chunks.call_args[0][1]
         assert chunks_arg[0]["chunk_id"] == 77
         assert chunks_arg[0]["content"] == content
         assert chunks_arg[0]["metadata"]["page"] == page
@@ -204,8 +204,8 @@ class TestEmbedRoundtrip:
 
 
 class TestEmbedDocumentUnit:
-    async def test_deletes_existing_before_insert(self):
-        """적재 전 기존 청크 삭제 + 캐시 무효화가 수행된다."""
+    async def test_replaces_via_single_rpc(self):
+        """적재 시 RPC 단일 호출로 처리된다 (delete/invalidate 별도 호출 X — 이슈 #43)."""
         settings = _create_settings()
         bedrock = _create_bedrock()
         supabase = _create_supabase()
@@ -213,8 +213,11 @@ class TestEmbedDocumentUnit:
 
         await embed_document(request, settings, bedrock, supabase)
 
-        supabase.delete_document_chunks.assert_called_once_with(1)
-        supabase.invalidate_cache_by_doc_id.assert_called_once_with(1)
+        supabase.replace_document_chunks.assert_called_once()
+        # 비원자 3단계 호출 경로는 사용되지 않음
+        supabase.delete_document_chunks.assert_not_called()
+        supabase.invalidate_cache_by_doc_id.assert_not_called()
+        supabase.insert_document_chunks.assert_not_called()
 
     async def test_embedding_uses_search_document_type(self):
         """임베딩 호출 시 input_type이 search_document이다."""
@@ -238,11 +241,11 @@ class TestEmbedDocumentUnit:
 
         await embed_document(request, settings, bedrock, supabase)
 
-        chunks_arg = supabase.insert_document_chunks.call_args[0][1]
+        chunks_arg = supabase.replace_document_chunks.call_args[0][1]
         assert len(chunks_arg[0]["embedding"]) == 1024
 
     async def test_all_chunks_fail(self):
-        """모든 청크가 실패하면 embedded_chunk_count=0, 삭제/삽입 미호출."""
+        """모든 청크가 실패하면 embedded_chunk_count=0, RPC 미호출 (기존 데이터 보존)."""
         settings = _create_settings()
         bedrock = _create_bedrock(fail_indices={0, 1, 2})
         supabase = _create_supabase()
@@ -253,6 +256,7 @@ class TestEmbedDocumentUnit:
         assert result["status"] == "partial_failure"
         assert result["embedded_chunk_count"] == 0
         assert len(result["failed_chunks"]) == 3
+        supabase.replace_document_chunks.assert_not_called()
         supabase.delete_document_chunks.assert_not_called()
         supabase.invalidate_cache_by_doc_id.assert_not_called()
         supabase.insert_document_chunks.assert_not_called()
@@ -352,28 +356,47 @@ class TestEmbedDocumentUnit:
         assert [
             f["index"] for f in result["failed_chunks"]
         ] == expected_failed_indices
-        # 성공분은 DB에 저장됨 (세 부수효과 모두 호출)
-        supabase.delete_document_chunks.assert_called_once_with(1)
-        supabase.invalidate_cache_by_doc_id.assert_called_once_with(1)
-        supabase.insert_document_chunks.assert_called_once()
+        # 성공분은 단일 RPC로 atomic 적재됨
+        supabase.replace_document_chunks.assert_called_once()
+        rpc_args = supabase.replace_document_chunks.call_args[0]
+        assert rpc_args[0] == 1
+        assert len(rpc_args[1]) == batch_size
 
     async def test_re_upload_same_doc_id(self):
-        """동일 doc_id 재적재 시 삭제 → 적재 순서로 실행된다."""
+        """동일 doc_id 재적재 시 단일 RPC로 atomic하게 처리된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
         supabase = _create_supabase()
-        supabase.delete_document_chunks.return_value = 5  # 기존 5개 삭제
 
         request = _make_embed_request(doc_id=1, chunk_count=2)
 
         result = await embed_document(request, settings, bedrock, supabase)
 
-        # 삭제 먼저
-        supabase.delete_document_chunks.assert_called_once_with(1)
-        supabase.invalidate_cache_by_doc_id.assert_called_once_with(1)
-        # 새로 적재
+        # RPC 단일 호출 — DELETE+INSERT가 트랜잭션 내부에서 처리
+        supabase.replace_document_chunks.assert_called_once()
+        assert supabase.replace_document_chunks.call_args[0][0] == 1
         assert result["embedded_chunk_count"] == 2
         assert result["status"] == "success"
+
+    async def test_rpc_failure_does_not_call_legacy_methods(self):
+        """RPC 실패 시 비원자 3단계 경로로 폴백하지 않는다 (데이터 손실 방지 — 이슈 #43)."""
+        import pytest
+
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        supabase = _create_supabase()
+        supabase.replace_document_chunks.side_effect = RuntimeError(
+            "Supabase RPC unavailable"
+        )
+        request = _make_embed_request(chunk_count=2)
+
+        with pytest.raises(RuntimeError, match="Supabase RPC unavailable"):
+            await embed_document(request, settings, bedrock, supabase)
+
+        # RPC가 실패해도 레거시 비원자 경로는 호출되지 않음
+        supabase.delete_document_chunks.assert_not_called()
+        supabase.invalidate_cache_by_doc_id.assert_not_called()
+        supabase.insert_document_chunks.assert_not_called()
 
 
 # ── Property 10: 문서 삭제 및 캐시 연쇄 무효화 ──

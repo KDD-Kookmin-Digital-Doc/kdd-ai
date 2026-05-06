@@ -143,6 +143,32 @@ class SupabaseVectorClient:
         )
         return len(result.data or [])
 
+    async def replace_document_chunks(
+        self, doc_id: int, chunks: list[dict]
+    ) -> int:
+        """단일 트랜잭션 내에서 기존 청크/관련 캐시 삭제 후 새 청크 삽입.
+
+        Supabase RPC `replace_document_chunks`를 호출한다. INSERT 실패 시 DELETE도
+        자동 롤백되어 데이터 손실이 발생하지 않는다 (이슈 #43).
+        """
+        if not chunks:
+            return 0
+        result = await self._run_with_timeout(
+            lambda: self._client.rpc(
+                "replace_document_chunks",
+                {"p_doc_id": doc_id, "p_chunks": chunks},
+            ).execute()
+        )
+        data = result.data
+        if isinstance(data, int):
+            return data
+        if isinstance(data, list) and data:
+            first = data[0]
+            if isinstance(first, dict):
+                return int(next(iter(first.values())))
+            return int(first)
+        return 0
+
     async def delete_document_chunks(self, doc_id: int) -> int:
         """doc_id에 해당하는 모든 청크 삭제. 삭제된 행 수 반환."""
         result = await self._run_with_timeout(
