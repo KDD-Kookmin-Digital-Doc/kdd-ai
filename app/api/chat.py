@@ -72,7 +72,7 @@ async def _run_pipeline(
         return context
 
     # 4. 질문 재작성 (academic 경로에서만)
-    context = await rewrite_query(context, bedrock)
+    context = await rewrite_query(context, bedrock, settings)
 
     # 5. 벡터 검색
     context = await search_documents(context, bedrock, supabase, settings)

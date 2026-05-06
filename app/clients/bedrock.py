@@ -59,7 +59,7 @@ class BedrockClient:
         self._light_model_id = settings.BEDROCK_LIGHT_MODEL_ID
         self._answer_model_id = settings.BEDROCK_ANSWER_MODEL_ID
         self._embedding_model_id = settings.BEDROCK_EMBEDDING_MODEL_ID
-        self._max_retries = 2
+        self._max_retries = settings.BEDROCK_MAX_RETRIES
 
         llm_config = Config(
             region_name=settings.AWS_REGION,

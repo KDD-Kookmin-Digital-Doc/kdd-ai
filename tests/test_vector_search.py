@@ -247,6 +247,19 @@ class TestSearchDocumentsUnit:
         supabase.search_similar_questions.assert_called_once()
         assert result.suggested_questions == ["질문1", "질문2", "질문3"]
 
+    async def test_fallback_passes_threshold_to_supabase(self):
+        """이슈 #46: fallback 호출 시 settings.FALLBACK_SIMILARITY_THRESHOLD 가 전달된다."""
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        supabase = _create_supabase(search_results=[], similar_questions=["q"])
+
+        ctx = _make_context()
+        await search_documents(ctx, bedrock, supabase, settings)
+
+        call_kwargs = supabase.search_similar_questions.call_args.kwargs
+        assert call_kwargs["threshold"] == settings.FALLBACK_SIMILARITY_THRESHOLD
+        assert call_kwargs["top_k"] == settings.FALLBACK_SUGGESTED_COUNT
+
     async def test_no_fallback_when_results_exist(self):
         """검색 결과가 있으면 search_similar_questions가 호출되지 않는다."""
         settings = _create_settings()

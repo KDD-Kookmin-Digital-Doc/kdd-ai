@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 
 from app.clients.bedrock import BedrockClient
+from app.config import Settings
 from app.models.pipeline import PipelineContext
+from app.pipeline._messages import make_user_message
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +40,13 @@ def _build_rewrite_messages(
         f"위 대화 맥락을 반영하여 현재 질문을 독립적인 문장으로 재작성하세요."
     )
 
-    return [{"role": "user", "content": [{"text": user_text}]}]
+    return [make_user_message(user_text)]
 
 
 async def rewrite_query(
     context: PipelineContext,
     bedrock: BedrockClient,
+    settings: Settings,
 ) -> PipelineContext:
     """대화 히스토리가 있으면 질문을 재작성하고, 없으면 원본을 그대로 사용한다.
 
@@ -61,14 +64,12 @@ async def rewrite_query(
     rewritten, usage = await bedrock.invoke_llm(
         system_prompt=_REWRITE_SYSTEM_PROMPT,
         messages=messages,
-        max_tokens=512,
+        max_tokens=settings.REWRITE_MAX_TOKENS,
     )
 
     cleaned = rewritten.strip()
     context.rewritten_question = cleaned or context.original_question
-    context.token_usage.prompt_tokens += usage.prompt_tokens
-    context.token_usage.completion_tokens += usage.completion_tokens
-    context.token_usage.total_tokens += usage.total_tokens
+    context.token_usage.accumulate(usage)
 
     logger.info(
         "질문 재작성 완료: %r → %r (토큰: %d)",

@@ -199,6 +199,34 @@ class TestSearchSimilarQuestions:
 
         assert result == []
 
+    async def test_threshold_passed_to_rpc(self, supabase_setup):
+        """이슈 #46: match_threshold 인자가 RPC 에 그대로 전달된다."""
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(data=[])
+
+        await client.search_similar_questions(
+            [0.1] * 1024, top_k=5, threshold=0.5
+        )
+
+        mock_sb.rpc.assert_called_once_with(
+            "match_similar_questions",
+            {
+                "query_embedding": [0.1] * 1024,
+                "match_count": 5,
+                "match_threshold": 0.5,
+            },
+        )
+
+    async def test_default_threshold_is_zero(self, supabase_setup):
+        """후방 호환성: threshold 미지정 시 0.0 전달."""
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(data=[])
+
+        await client.search_similar_questions([0.1] * 1024)
+
+        call_kwargs = mock_sb.rpc.call_args[0][1]
+        assert call_kwargs["match_threshold"] == 0.0
+
 
 # ── insert_document_chunks 테스트 ──
 

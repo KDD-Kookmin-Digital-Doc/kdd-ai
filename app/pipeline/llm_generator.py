@@ -9,6 +9,7 @@ from typing import AsyncGenerator
 from app.clients.bedrock import BedrockClient
 from app.config import Settings
 from app.models.pipeline import PipelineContext, TokenUsage
+from app.pipeline._messages import make_text_content, make_user_message
 
 logger = logging.getLogger(__name__)
 
@@ -72,22 +73,24 @@ def truncate_history(
     - budget_tokens 이내이면 전체 history 반환.
     - 초과 시 앞(오래된)부터 제거.
     - 1개만 남았는데도 초과면 빈 리스트 반환.
+
+    PR-R1: 기존 ``pop(0)`` 루프(매번 O(n) shift + 토큰 재계산 가능)에서
+    토큰 카운트를 한 번만 계산한 뒤 시작 인덱스를 앞으로 옮기는 O(n) 방식으로
+    교체. 멀티턴이 길어질수록 차이가 커진다.
     """
     if budget_tokens <= 0:
         return []
 
-    total = sum(_estimate_tokens(m.get("content", "")) for m in history)
+    token_counts = [_estimate_tokens(m.get("content", "")) for m in history]
+    total = sum(token_counts)
     if total <= budget_tokens:
         return list(history)
 
-    truncated = list(history)
-    while truncated:
-        removed = truncated.pop(0)
-        total -= _estimate_tokens(removed.get("content", ""))
-        if total <= budget_tokens:
-            return truncated
-
-    return []
+    start = 0
+    while start < len(history) and total > budget_tokens:
+        total -= token_counts[start]
+        start += 1
+    return list(history[start:])
 
 
 def _build_doc_context(context: PipelineContext) -> str:
@@ -179,13 +182,10 @@ def build_academic_messages(
     for msg in truncated:
         messages.append({
             "role": msg["role"],
-            "content": [{"text": msg["content"]}],
+            "content": make_text_content(msg["content"]),
         })
 
-    messages.append({
-        "role": "user",
-        "content": [{"text": context.original_question}],
-    })
+    messages.append(make_user_message(context.original_question))
 
     return system_prompt, messages
 
@@ -208,9 +208,9 @@ def build_chitchat_messages(
     for msg in truncated:
         messages.append({
             "role": msg["role"],
-            "content": [{"text": msg["content"]}],
+            "content": make_text_content(msg["content"]),
         })
-    messages.append({"role": "user", "content": [{"text": question}]})
+    messages.append(make_user_message(question))
     return _CHITCHAT_SYSTEM_PROMPT, messages
 
 
@@ -228,7 +228,7 @@ async def generate_response(
     if context.intent == "chitchat":
         system_prompt, messages = build_chitchat_messages(context, settings)
         model = "light"
-        max_tokens = 256
+        max_tokens = settings.CHITCHAT_MAX_TOKENS
     else:
         system_prompt, messages = build_academic_messages(context, settings)
         model = "answer"
@@ -245,9 +245,7 @@ async def generate_response(
         yield token
 
     usage = stream_usage
-    context.token_usage.prompt_tokens += usage.prompt_tokens
-    context.token_usage.completion_tokens += usage.completion_tokens
-    context.token_usage.total_tokens += usage.total_tokens
+    context.token_usage.accumulate(usage)
 
     logger.info(
         "LLM 생성 완료: intent=%s, model=%s (토큰: %d)",

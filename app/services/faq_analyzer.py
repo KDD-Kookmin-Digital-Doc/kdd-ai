@@ -120,7 +120,7 @@ async def _generate_draft_answer(
     # 벡터 검색
     results = await supabase.search_documents(
         embedding=embedding,
-        top_k=5,
+        top_k=settings.VECTOR_SEARCH_TOP_K,
         threshold=settings.SIMILARITY_THRESHOLD,
     )
 
@@ -153,7 +153,7 @@ async def _generate_draft_answer(
     answer, _ = await bedrock.invoke_llm(
         system_prompt=system_prompt,
         messages=messages,
-        max_tokens=512,
+        max_tokens=settings.FAQ_LLM_MAX_TOKENS,
         model="answer",
     )
 

@@ -167,7 +167,7 @@ class TestRunPipeline:
             ctx.intent = "academic"
             return ctx
 
-        async def _mock_rewrite(ctx, br):
+        async def _mock_rewrite(ctx, br, st):
             call_order.append("rewrite")
             ctx.rewritten_question = ctx.original_question
             return ctx
@@ -193,7 +193,7 @@ class TestRunPipeline:
         bedrock = _create_bedrock()
         supabase = _create_supabase()
 
-        async def _mock_rewrite(ctx, br):
+        async def _mock_rewrite(ctx, br, st):
             ctx.rewritten_question = ctx.original_question
             return ctx
 
@@ -232,7 +232,7 @@ class TestRunPipeline:
 
         contexts_captured = []
 
-        async def _mock_rewrite(ctx, br):
+        async def _mock_rewrite(ctx, br, st):
             contexts_captured.append(ctx)
             ctx.rewritten_question = ctx.original_question
             return ctx
@@ -499,7 +499,7 @@ class TestErrorPropagation:
 
         request = _make_chat_request(is_first_message=False)
 
-        async def _mock_rewrite(ctx, br):
+        async def _mock_rewrite(ctx, br, st):
             ctx.rewritten_question = ctx.original_question
             return ctx
 
@@ -521,7 +521,7 @@ class TestErrorPropagation:
 
         request = _make_chat_request(is_first_message=True)
 
-        async def _mock_rewrite(ctx, br):
+        async def _mock_rewrite(ctx, br, st):
             ctx.rewritten_question = ctx.original_question
             return ctx
 
@@ -582,7 +582,7 @@ class TestPipelineDeterminism:
             bedrock = _create_bedrock()
             supabase = _create_supabase()
 
-            async def _mock_rewrite(ctx, br):
+            async def _mock_rewrite(ctx, br, st):
                 ctx.rewritten_question = ctx.original_question
                 return ctx
 
