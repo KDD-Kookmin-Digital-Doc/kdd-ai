@@ -81,12 +81,24 @@ async def classify_intent(
     - LLM 응답이 유효하지 않으면 ``"academic"``으로 기본 분류 (안전 측 폴백).
     """
     user_text = _build_classify_user_message(context, settings)
+    logger.debug(
+        "의도 분류 입력 길이: %d자 (history_turns=%d, chars_per_turn=%d)",
+        len(user_text),
+        settings.INTENT_HISTORY_TURNS,
+        settings.INTENT_HISTORY_CHARS_PER_TURN,
+    )
     messages = [{"role": "user", "content": [{"text": user_text}]}]
 
     response, usage = await bedrock.invoke_llm(
         system_prompt=_INTENT_SYSTEM_PROMPT,
         messages=messages,
         max_tokens=16,
+    )
+
+    logger.debug(
+        "의도 분류 토큰: prompt=%d, completion=%d",
+        usage.prompt_tokens,
+        usage.completion_tokens,
     )
 
     cleaned = response.strip()
