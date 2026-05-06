@@ -230,6 +230,45 @@ class TestRunPipeline:
 
         assert context.session_id == expected_session
 
+    async def test_chat_endpoint_sets_session_contextvar(self):
+        """PR-50 핵심 회귀: chat() endpoint 진입 시 SESSION_ID_VAR 가 설정된다.
+
+        외부 리뷰 Minor 2 — `_run_pipeline` 직접 호출 테스트만으로는
+        chat 함수 진입부의 `set_session_id(request.session_id)` 줄이 회귀
+        테스트 밖에 있다. 본 테스트는 chat() 호출 시 _run_pipeline 안에서
+        SESSION_ID_VAR.get() 이 request.session_id 와 같은지 spy 로 확인.
+        """
+        from app.api.chat import chat
+        from app.logging_context import SESSION_ID_VAR
+
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        supabase = _create_supabase()
+        http_request = _make_http_request()
+        request = _make_chat_request(is_first_message=True)
+
+        captured: list[str] = []
+
+        async def _spy_pipeline(req, br, sb, st):
+            captured.append(SESSION_ID_VAR.get())
+            ctx = PipelineContext(
+                original_question=req.message,
+                user_context=req.user_context,
+                session_id=req.session_id,
+            )
+            ctx.cache_hit = True
+            ctx.cached_answer = "test"
+            return ctx
+
+        async def _mock_stream_gen():
+            yield 'data: {"type": "done", "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}\n\n'
+
+        with patch("app.api.chat._run_pipeline", side_effect=_spy_pipeline), \
+             patch("app.api.chat.stream_sse_response", side_effect=lambda *a, **k: _mock_stream_gen()):
+            await chat(request, http_request, settings, bedrock, supabase)
+
+        assert captured == [request.session_id]
+
     async def test_history_converted_to_dicts(self):
         """history가 HistoryMessage → dict로 변환된다."""
         settings = _create_settings()

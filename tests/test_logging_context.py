@@ -9,6 +9,7 @@ session 추적 불가).
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 
 import pytest
@@ -21,15 +22,27 @@ from app.logging_context import (
 )
 
 
+# 외부 리뷰 Minor 3 — 테스트 간 ContextVar 누수 차단 안전망.
+# 어떤 테스트가 set 후 reset 못 하고 죽어도 다음 테스트가 깨끗한 상태로 시작.
+@pytest.fixture(autouse=True)
+def _reset_session_var():
+    yield
+    try:
+        SESSION_ID_VAR.set("-")
+    except LookupError:
+        pass
+
+
 class TestSessionIdContextVar:
     def test_default_is_dash(self):
-        """미설정 상태에서는 default `-` 가 반환된다 (startup/lifespan 안전)."""
-        # 이전 테스트가 set 했을 수 있으니 신선한 토큰 + reset
-        token = set_session_id("-")
-        try:
-            assert SESSION_ID_VAR.get() == "-"
-        finally:
-            reset_session_id(token)
+        """ContextVar 의 default 정의 자체를 lock 한다.
+
+        외부 리뷰 Minor 1 — `set("-")` 후 `get == "-"` 패턴은 default 가 `"?"` 로
+        바뀌어도 통과해 lock 가치가 없음. `contextvars.Context()` 는 진짜 빈
+        컨텍스트라 다른 테스트의 set 잔여가 새 나가지 않음.
+        """
+        fresh_ctx = contextvars.Context()
+        assert fresh_ctx.run(SESSION_ID_VAR.get) == "-"
 
     def test_set_and_get(self):
         token = set_session_id("sess-X")
