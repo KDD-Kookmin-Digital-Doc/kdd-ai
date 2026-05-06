@@ -27,12 +27,14 @@ async def search_documents(
     """
     question = context.rewritten_question or context.original_question
 
-    # Task 16: semantic_cache가 미리 임베딩한 결과를 텍스트 일치 시 재사용.
+    # Task 16: semantic_cache가 미리 임베딩한 결과를 텍스트 + input_type 일치 시 재사용.
     # rewrite로 텍스트가 달라졌거나 cache 단계 자체를 skip(멀티턴)했을 때만 새로 호출.
-    # input_type=search_query 가정 — semantic_cache와 일치해야 재사용 안전.
+    # input_type 까지 비교해 미래에 cache 측 input_type 이 바뀌어도 silent quality
+    # degradation 이 발생하지 않도록 가드.
     if (
         context.question_embedding is not None
         and context.embedded_question_text == question
+        and context.embedded_question_input_type == "search_query"
     ):
         question_embedding = context.question_embedding
         logger.debug("임베딩 재사용 (텍스트 일치): %r", question)

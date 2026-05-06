@@ -326,6 +326,7 @@ class TestAnswerCacheCompleteness:
             source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="학사요람.pdf", page=10)],
             question_embedding=cached_embedding,
             embedded_question_text="휴학 기간은?",
+            embedded_question_input_type="search_query",
         )
 
         await _save_answer_cache(context, ["답변"], bedrock, supabase)
@@ -333,6 +334,27 @@ class TestAnswerCacheCompleteness:
         bedrock.embed_texts.assert_not_called()
         cache: AnswerCache = supabase.insert_answer_cache.call_args[0][0]
         assert cache.embedding == cached_embedding
+
+    async def test_save_creates_new_embedding_when_input_type_mismatch(self):
+        """input_type 이 search_query 가 아니면 새로 호출 (silent degradation 가드)."""
+        bedrock = _create_bedrock()
+        supabase = _create_supabase()
+
+        context = PipelineContext(
+            original_question="휴학 기간은?",
+            intent="academic",
+            search_results=[_make_search_result(doc_id=1)],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            question_embedding=[0.42] * 1024,
+            embedded_question_text="휴학 기간은?",
+            embedded_question_input_type="search_document",  # ← 잘못 set된 케이스
+        )
+
+        await _save_answer_cache(context, ["답변"], bedrock, supabase)
+
+        bedrock.embed_texts.assert_called_once_with(
+            ["휴학 기간은?"], input_type="search_query"
+        )
 
     async def test_save_creates_new_embedding_when_no_cache(self):
         """context.question_embedding이 None이면 새로 임베딩 (예: cache 단계가 실패한 케이스)."""

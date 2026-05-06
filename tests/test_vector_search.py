@@ -301,6 +301,7 @@ class TestEmbeddingReuse:
         ctx = _make_context(question="휴학 기간은?", rewritten=None)
         ctx.question_embedding = cached_embedding
         ctx.embedded_question_text = "휴학 기간은?"
+        ctx.embedded_question_input_type = "search_query"
 
         await search_documents(ctx, bedrock, supabase, settings)
 
@@ -308,6 +309,24 @@ class TestEmbeddingReuse:
         # 검색에는 캐시된 임베딩이 그대로 사용됨
         call_kwargs = supabase.search_documents.call_args
         assert call_kwargs.kwargs["embedding"] == cached_embedding
+
+    async def test_creates_new_embedding_when_input_type_mismatch(self):
+        """input_type 이 search_query 가 아니면 새로 호출 (silent degradation 가드)."""
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        supabase = _create_supabase()
+
+        ctx = _make_context(question="질문", rewritten=None)
+        ctx.question_embedding = [0.42] * 1024
+        ctx.embedded_question_text = "질문"
+        ctx.embedded_question_input_type = "search_document"  # ← 잘못 set된 케이스
+
+        await search_documents(ctx, bedrock, supabase, settings)
+
+        # input_type mismatch → 재사용 거부, 새로 호출
+        bedrock.embed_texts.assert_called_once_with(
+            ["질문"], input_type="search_query"
+        )
 
     async def test_creates_new_embedding_when_rewrite_changes_text(self):
         """rewrite로 텍스트가 달라지면 새로 임베딩한다 (의미 다른 텍스트는 재사용 X)."""

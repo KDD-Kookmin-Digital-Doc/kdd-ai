@@ -144,16 +144,20 @@ async def _save_answer_cache(
         # Task 16: semantic_cache가 original_question을 search_query로 임베딩한 결과를 재사용.
         # vector_search가 rewrite 분기에서 새 임베딩을 만들어도 context.question_embedding은
         # 갱신되지 않으므로 여기서도 original 측 임베딩이 안전하게 유지됨.
+        # input_type 까지 비교해 미래에 cache 측 input_type 이 바뀌면 자동으로 새로 호출.
         if (
             context.question_embedding is not None
             and context.embedded_question_text == context.original_question
+            and context.embedded_question_input_type == "search_query"
         ):
             question_embedding = context.question_embedding
+            logger.debug("_save_answer_cache 임베딩 재사용")
         else:
             embeddings = await bedrock.embed_texts(
                 [context.original_question], input_type="search_query"
             )
             question_embedding = embeddings[0]
+            logger.debug("_save_answer_cache 임베딩 신규 호출")
 
         source_doc_ids = list({r.doc_id for r in (context.search_results or [])})
         sources = [

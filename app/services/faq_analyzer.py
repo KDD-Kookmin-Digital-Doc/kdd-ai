@@ -38,7 +38,7 @@ async def analyze_faq(
     """질문 배열을 클러스터링하여 FAQ 후보를 생성한다.
 
     1. 질문 수가 min_cluster_size 미만이면 InsufficientDataError.
-    2. Cohere Embed v3로 질문 벡터화.
+    2. Cohere Embed로 질문 벡터화.
     3. HDBSCAN으로 클러스터링 (노이즈 자동 제외).
     4. 각 클러스터에서 중심에 가장 가까운 질문을 대표 질문으로 선정.
     5. 대표 질문에 대해 벡터 검색 → LLM 답변 초안 생성.

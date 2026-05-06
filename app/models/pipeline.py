@@ -63,12 +63,13 @@ class PipelineContext:
 
     임베딩 재사용 contract (Task 16):
     - ``question_embedding`` 은 ``embedded_question_text`` 를
-      ``input_type='search_query'`` 로 임베딩한 결과이다.
-    - ``semantic_cache`` 가 임베딩 직후 두 필드를 set하고, 하위 단계
-      (``vector_search``, ``_save_answer_cache``) 가 텍스트 일치 시 재사용한다.
-    - 하위 단계는 두 필드를 **읽기만** 한다(덮어쓰지 않는다).
-    - 미래에 input_type을 분리해야 하면 ``embedded_question_input_type`` 같은
-      필드를 추가해 재사용 조건에 포함시킨다.
+      ``embedded_question_input_type`` 으로 임베딩한 결과이다.
+    - ``semantic_cache`` 가 임베딩 직후 세 필드를 set하고, 하위 단계
+      (``vector_search``, ``_save_answer_cache``) 가 **텍스트 + input_type 둘 다
+      일치할 때만** 재사용한다. input_type 가드는 미래에 누군가
+      ``semantic_cache`` 의 input_type을 변경했을 때 silent quality
+      degradation을 막는 안전장치이다.
+    - 하위 단계는 세 필드를 **읽기만** 한다(덮어쓰지 않는다).
     """
 
     original_question: str
@@ -85,3 +86,4 @@ class PipelineContext:
     token_usage: TokenUsage = field(default_factory=TokenUsage)
     question_embedding: list[float] | None = None
     embedded_question_text: str | None = None
+    embedded_question_input_type: str | None = None
