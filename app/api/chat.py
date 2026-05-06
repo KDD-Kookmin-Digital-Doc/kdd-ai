@@ -174,7 +174,7 @@ async def _save_answer_cache(
             source_doc_ids=source_doc_ids,
             sources=sources,
         )
-        await supabase.insert_answer_cache(cache)
+        await supabase.upsert_answer_cache(cache)
         logger.info("답변 캐시 저장 완료: %r", context.original_question)
     except Exception:
         logger.warning("답변 캐시 저장 실패 — 사용자 응답에 영향 없음", exc_info=True)

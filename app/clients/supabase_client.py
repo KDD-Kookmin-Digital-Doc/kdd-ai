@@ -221,20 +221,24 @@ class SupabaseVectorClient:
         )
         return len(result.data or [])
 
-    async def insert_answer_cache(self, cache: AnswerCache) -> None:
-        """답변 캐시 저장. 학사규정 질문의 정상 답변 완료 시에만 호출."""
+    async def upsert_answer_cache(self, cache: AnswerCache) -> None:
+        """답변 캐시 저장 (UPSERT, 이슈 #49). 학사규정 질문의 정상 답변 완료 시에만 호출.
+
+        ``upsert_answer_cache`` Supabase RPC 가 단일 트랜잭션으로 동일 ``question``
+        의 기존 row 를 DELETE 후 INSERT. 동시 호출 시에도 question 동일하면 최후
+        INSERT 만 살아남아 중복 row 누적 차단.
+        """
         await self._run_with_timeout(
-            lambda: self._client.table("answer_cache")
-            .insert(
+            lambda: self._client.rpc(
+                "upsert_answer_cache",
                 {
-                    "question": cache.question,
-                    "embedding": cache.embedding,
-                    "answer": cache.answer,
-                    "source_doc_ids": cache.source_doc_ids,
-                    "sources": cache.sources,
-                }
-            )
-            .execute()
+                    "p_question": cache.question,
+                    "p_embedding": cache.embedding,
+                    "p_answer": cache.answer,
+                    "p_source_doc_ids": cache.source_doc_ids,
+                    "p_sources": cache.sources,
+                },
+            ).execute()
         )
 
     # ── 헬스체크 ──

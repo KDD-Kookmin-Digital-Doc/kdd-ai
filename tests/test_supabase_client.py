@@ -459,15 +459,14 @@ class TestInvalidateCacheByDocId:
         contains_mock.assert_called_once_with("source_doc_ids", ["20240001"])
 
 
-# ── insert_answer_cache 테스트 ──
+# ── upsert_answer_cache 테스트 (이슈 #49) ──
 
 
-class TestInsertAnswerCache:
+class TestUpsertAnswerCache:
     async def test_success(self, supabase_setup):
+        """upsert_answer_cache RPC 호출 시 모든 필드가 정확히 전달된다."""
         client, mock_sb = supabase_setup
-        mock_sb.table.return_value.insert.return_value.execute.return_value = (
-            MagicMock(data=[{"id": 1}])
-        )
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(data=None)
 
         cache = AnswerCache(
             question="휴학 기간",
@@ -477,9 +476,35 @@ class TestInsertAnswerCache:
             sources=[{"doc_name": "학사요람.pdf", "page": 45}],
         )
 
-        await client.insert_answer_cache(cache)
+        await client.upsert_answer_cache(cache)
 
-        mock_sb.table.assert_called_with("answer_cache")
+        mock_sb.rpc.assert_called_once_with(
+            "upsert_answer_cache",
+            {
+                "p_question": "휴학 기간",
+                "p_embedding": [0.1] * 1024,
+                "p_answer": "최대 4년입니다.",
+                "p_source_doc_ids": [1],
+                "p_sources": [{"doc_name": "학사요람.pdf", "page": 45}],
+            },
+        )
+
+    async def test_does_not_use_table_insert(self, supabase_setup):
+        """이슈 #49: 더 이상 .table().insert() 직접 호출 X — RPC 만 사용."""
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(data=None)
+
+        cache = AnswerCache(
+            question="q", embedding=[0.1] * 1024, answer="a",
+            source_doc_ids=[], sources=[],
+        )
+        await client.upsert_answer_cache(cache)
+
+        # 외부 리뷰 Nit 9: RPC 호출됐는지 + .table().insert() 체인 미호출 둘 다 lock.
+        mock_sb.rpc.assert_called_once()
+        assert mock_sb.rpc.call_args[0][0] == "upsert_answer_cache"
+        # .table("answer_cache").insert(...) 체인 자체가 발동되지 않음을 직접 검증
+        assert not mock_sb.table.return_value.insert.called
 
 
 # ── health_check 테스트 ──

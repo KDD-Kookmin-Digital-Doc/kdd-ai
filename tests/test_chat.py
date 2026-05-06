@@ -51,7 +51,7 @@ def _create_supabase() -> AsyncMock:
     supabase.search_answer_cache.return_value = None
     supabase.search_documents.return_value = []
     supabase.search_similar_questions.return_value = []
-    supabase.insert_answer_cache.return_value = None
+    supabase.upsert_answer_cache.return_value = None
     return supabase
 
 
@@ -331,8 +331,8 @@ class TestAnswerCacheCompleteness:
 
         await _save_answer_cache(context, ["최대 ", "4년입니다."], bedrock, supabase)
 
-        supabase.insert_answer_cache.assert_called_once()
-        cache: AnswerCache = supabase.insert_answer_cache.call_args[0][0]
+        supabase.upsert_answer_cache.assert_called_once()
+        cache: AnswerCache = supabase.upsert_answer_cache.call_args[0][0]
         assert cache.question == "휴학 기간은?"
         assert len(cache.embedding) == 1024
         assert cache.answer == "최대 4년입니다."
@@ -359,7 +359,7 @@ class TestAnswerCacheCompleteness:
 
         await _save_answer_cache(context, [answer], bedrock, supabase)
 
-        cache: AnswerCache = supabase.insert_answer_cache.call_args[0][0]
+        cache: AnswerCache = supabase.upsert_answer_cache.call_args[0][0]
         assert cache.question
         assert cache.embedding
         assert cache.answer
@@ -385,7 +385,7 @@ class TestAnswerCacheCompleteness:
         await _save_answer_cache(context, ["답변"], bedrock, supabase)
 
         bedrock.embed_texts.assert_not_called()
-        cache: AnswerCache = supabase.insert_answer_cache.call_args[0][0]
+        cache: AnswerCache = supabase.upsert_answer_cache.call_args[0][0]
         assert cache.embedding == cached_embedding
 
     async def test_save_creates_new_embedding_when_input_type_mismatch(self):
@@ -481,7 +481,7 @@ class TestNoCacheForChitchatAndFallback:
             ):
                 chunks.append(chunk)
 
-        supabase.insert_answer_cache.assert_not_called()
+        supabase.upsert_answer_cache.assert_not_called()
 
     async def test_fallback_no_cache(self):
         """폴백 경로에서는 캐시가 저장되지 않는다."""
@@ -508,7 +508,7 @@ class TestNoCacheForChitchatAndFallback:
             ):
                 pass
 
-        supabase.insert_answer_cache.assert_not_called()
+        supabase.upsert_answer_cache.assert_not_called()
 
     async def test_cache_hit_no_cache(self):
         """캐시 히트 경로에서는 새로운 캐시를 저장하지 않는다."""
@@ -536,7 +536,7 @@ class TestNoCacheForChitchatAndFallback:
             ):
                 pass
 
-        supabase.insert_answer_cache.assert_not_called()
+        supabase.upsert_answer_cache.assert_not_called()
 
 
 # ── 에러 전파 테스트 ──
@@ -598,7 +598,7 @@ class TestErrorPropagation:
         """캐시 저장 실패 시 사용자 응답에 영향 없음."""
         bedrock = _create_bedrock()
         supabase = _create_supabase()
-        supabase.insert_answer_cache.side_effect = RuntimeError("DB 장애")
+        supabase.upsert_answer_cache.side_effect = RuntimeError("DB 장애")
 
         context = PipelineContext(
             original_question="질문",
@@ -609,8 +609,8 @@ class TestErrorPropagation:
 
         # 예외가 발생하지 않아야 함
         await _save_answer_cache(context, ["답변"], bedrock, supabase)
-        # insert_answer_cache가 호출되었지만 예외는 잡힘
-        supabase.insert_answer_cache.assert_called_once()
+        # upsert_answer_cache가 호출되었지만 예외는 잡힘
+        supabase.upsert_answer_cache.assert_called_once()
 
 
 # ── Property 20: 파이프라인 경로 결정론 ──
