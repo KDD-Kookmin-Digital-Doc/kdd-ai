@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from hypothesis import given, settings as hyp_settings
 from hypothesis import strategies as st
 
@@ -380,8 +381,6 @@ class TestEmbedDocumentUnit:
 
     async def test_rpc_failure_does_not_call_legacy_methods(self):
         """RPC 실패 시 비원자 3단계 경로로 폴백하지 않는다 (데이터 손실 방지 — 이슈 #43)."""
-        import pytest
-
         settings = _create_settings()
         bedrock = _create_bedrock()
         supabase = _create_supabase()

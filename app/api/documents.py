@@ -26,8 +26,10 @@ router = APIRouter()
         "문서 청크 목록을 받아 임베딩을 생성하고 벡터 DB에 적재합니다.\n\n"
         "- 동일 `doc_id` 재적재 시 **단일 트랜잭션**(Supabase RPC)으로 "
         "기존 청크 삭제 + 관련 캐시 무효화 + 새 청크 삽입 (last-write-wins, atomic)\n"
-        "- 일부 청크 임베딩 실패 시 `status=partial_failure` 로 응답하며, 성공분만 적재됩니다.\n"
-        "- 모든 청크 실패 시 기존 데이터는 유지됩니다 (RPC 미호출).\n"
+        "- 일부 청크 임베딩 실패 시 `status=partial_failure` 로 응답합니다. "
+        "이때도 RPC는 호출되며, 동일 `doc_id`의 기존 청크 전체가 새 성공분으로 "
+        "교체됩니다 (atomic). 즉 `partial_failure`라도 기존 데이터는 그대로가 아닙니다.\n"
+        "- 모든 청크 임베딩 실패 시 RPC 미호출 → 기존 데이터 그대로 보존.\n"
         "- DB 적재 단계 실패 시 트랜잭션 롤백으로 기존 데이터가 보존됩니다."
     ),
     responses={

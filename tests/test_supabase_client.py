@@ -283,7 +283,7 @@ class TestReplaceDocumentChunks:
         mock_sb.rpc.assert_not_called()
 
     async def test_returns_count_from_list_of_dict(self, supabase_setup):
-        """RPC가 [{"replace_document_chunks": N}] 형태로 반환할 때도 N을 추출한다."""
+        """RPC가 [{"replace_document_chunks": N}] 형태로 반환할 때 명시 키로 N을 추출한다."""
         client, mock_sb = supabase_setup
         mock_sb.rpc.return_value.execute.return_value = MagicMock(
             data=[{"replace_document_chunks": 5}]
@@ -293,6 +293,60 @@ class TestReplaceDocumentChunks:
         count = await client.replace_document_chunks(1, chunks)
 
         assert count == 5
+
+    async def test_returns_count_from_list_of_int(self, supabase_setup):
+        """RPC가 [N] (단일 정수 리스트) 형태로 반환해도 N을 추출한다."""
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(data=[7])
+
+        chunks = [{"chunk_id": 1, "content": "x", "embedding": [0.1] * 1024, "metadata": {}}]
+        count = await client.replace_document_chunks(1, chunks)
+
+        assert count == 7
+
+    async def test_explicit_key_takes_precedence_over_dict_order(self, supabase_setup):
+        """dict에 다른 키가 섞여 있어도 'replace_document_chunks' 키가 우선 추출된다."""
+        client, mock_sb = supabase_setup
+        # 메타 키가 먼저 와도 명시 키 우선 — PostgREST 직렬화 순서 변동에 견고
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(
+            data=[{"_meta": "ignored", "replace_document_chunks": 9}]
+        )
+
+        chunks = [{"chunk_id": 1, "content": "x", "embedding": [0.1] * 1024, "metadata": {}}]
+        count = await client.replace_document_chunks(1, chunks)
+
+        assert count == 9
+
+    async def test_unknown_response_shape_warns_and_returns_zero(
+        self, supabase_setup, caplog
+    ):
+        """알 수 없는 응답 형태는 silent 0가 아니라 경고 로그 + 0을 반환한다."""
+        import logging
+
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(
+            data={"unexpected": "shape"}
+        )
+
+        chunks = [{"chunk_id": 1, "content": "x", "embedding": [0.1] * 1024, "metadata": {}}]
+
+        with caplog.at_level(logging.WARNING, logger="app.clients.supabase_client"):
+            count = await client.replace_document_chunks(1, chunks)
+
+        assert count == 0
+        assert any(
+            "응답 형태가 예상과 다릅니다" in rec.message for rec in caplog.records
+        )
+
+    async def test_returns_zero_for_empty_list(self, supabase_setup):
+        """빈 리스트 응답은 0을 반환한다 (RPC가 0 row 반환한 정상 경로)."""
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(data=[])
+
+        chunks = [{"chunk_id": 1, "content": "x", "embedding": [0.1] * 1024, "metadata": {}}]
+        count = await client.replace_document_chunks(1, chunks)
+
+        assert count == 0
 
     async def test_returns_zero_for_none_data(self, supabase_setup):
         """RPC가 None 또는 빈 데이터를 반환하면 0."""
