@@ -113,3 +113,4 @@ class PipelineContext:
     question_embedding: list[float] | None = None
     embedded_question_text: str | None = None
     embedded_question_input_type: str | None = None
+    session_id: str = ""  # PR-50: 세션 단위 트레이싱. 미래 메트릭/DB 저장에도 사용 가능.

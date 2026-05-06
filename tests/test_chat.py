@@ -216,6 +216,20 @@ class TestRunPipeline:
             assert context.intent == "academic"
             assert len(context.search_results) == 1
 
+    async def test_session_id_propagated_to_context(self):
+        """PR-50: ChatRequest.session_id 가 PipelineContext.session_id 에 복사된다."""
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        supabase = _create_supabase()
+
+        request = _make_chat_request(is_first_message=True)
+        # _make_chat_request 의 session_id 값은 헬퍼 default 따름
+        expected_session = request.session_id
+
+        context = await _run_pipeline(request, bedrock, supabase, settings)
+
+        assert context.session_id == expected_session
+
     async def test_history_converted_to_dicts(self):
         """history가 HistoryMessage → dict로 변환된다."""
         settings = _create_settings()
