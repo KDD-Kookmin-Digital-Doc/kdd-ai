@@ -16,11 +16,11 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # AWS Bedrock 설정
-    BEDROCK_LIGHT_MODEL_ID: str = "anthropic.claude-3-haiku-20240307-v1:0"
-    BEDROCK_ANSWER_MODEL_ID: str = "anthropic.claude-3-5-sonnet-20241022-v2:0"
-    BEDROCK_EMBEDDING_MODEL_ID: str = "cohere.embed-multilingual-v3"
-    AWS_REGION: str = "us-east-1"
+    # AWS Bedrock 설정 (기본값은 운영 환경 .env 와 일치 — 이슈 #45)
+    BEDROCK_LIGHT_MODEL_ID: str = "apac.anthropic.claude-3-haiku-20240307-v1:0"
+    BEDROCK_ANSWER_MODEL_ID: str = "apac.anthropic.claude-3-5-sonnet-20241022-v2:0"
+    BEDROCK_EMBEDDING_MODEL_ID: str = "global.cohere.embed-v4:0"
+    AWS_REGION: str = "ap-northeast-2"
 
     # 임베딩 및 LLM 설정
     EMBEDDING_DIMENSION: int = 1024
