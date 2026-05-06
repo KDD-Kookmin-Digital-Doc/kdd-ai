@@ -241,6 +241,134 @@ class TestInsertDocumentChunks:
         assert all(c["doc_id"] == 99 for c in inserted_payload)
 
 
+# ── replace_document_chunks 테스트 ──
+
+
+class TestReplaceDocumentChunks:
+    async def test_calls_rpc_with_doc_id_and_chunks(self, supabase_setup):
+        """단일 RPC 호출로 doc_id와 chunks 페이로드를 전달한다."""
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(data=2)
+
+        chunks = [
+            {
+                "chunk_id": 1,
+                "content": "내용1",
+                "embedding": [0.1] * 1024,
+                "metadata": {"page": 1},
+            },
+            {
+                "chunk_id": 2,
+                "content": "내용2",
+                "embedding": [0.2] * 1024,
+                "metadata": {"page": 2},
+            },
+        ]
+
+        count = await client.replace_document_chunks(99, chunks)
+
+        assert count == 2
+        mock_sb.rpc.assert_called_once_with(
+            "replace_document_chunks",
+            {"p_doc_id": 99, "p_chunks": chunks},
+        )
+
+    async def test_empty_chunks_skips_rpc(self, supabase_setup):
+        """빈 chunks 리스트는 RPC 호출 없이 0 반환 (기존 데이터 보존)."""
+        client, mock_sb = supabase_setup
+
+        count = await client.replace_document_chunks(99, [])
+
+        assert count == 0
+        mock_sb.rpc.assert_not_called()
+
+    async def test_returns_count_from_list_of_dict(self, supabase_setup):
+        """RPC가 [{"replace_document_chunks": N}] 형태로 반환할 때 명시 키로 N을 추출한다."""
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(
+            data=[{"replace_document_chunks": 5}]
+        )
+
+        chunks = [{"chunk_id": 1, "content": "x", "embedding": [0.1] * 1024, "metadata": {}}]
+        count = await client.replace_document_chunks(1, chunks)
+
+        assert count == 5
+
+    async def test_returns_count_from_list_of_int(self, supabase_setup):
+        """RPC가 [N] (단일 정수 리스트) 형태로 반환해도 N을 추출한다."""
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(data=[7])
+
+        chunks = [{"chunk_id": 1, "content": "x", "embedding": [0.1] * 1024, "metadata": {}}]
+        count = await client.replace_document_chunks(1, chunks)
+
+        assert count == 7
+
+    async def test_explicit_key_takes_precedence_over_dict_order(self, supabase_setup):
+        """dict에 다른 키가 섞여 있어도 'replace_document_chunks' 키가 우선 추출된다."""
+        client, mock_sb = supabase_setup
+        # 메타 키가 먼저 와도 명시 키 우선 — PostgREST 직렬화 순서 변동에 견고
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(
+            data=[{"_meta": "ignored", "replace_document_chunks": 9}]
+        )
+
+        chunks = [{"chunk_id": 1, "content": "x", "embedding": [0.1] * 1024, "metadata": {}}]
+        count = await client.replace_document_chunks(1, chunks)
+
+        assert count == 9
+
+    async def test_unknown_response_shape_warns_and_returns_zero(
+        self, supabase_setup, caplog
+    ):
+        """알 수 없는 응답 형태는 silent 0가 아니라 경고 로그 + 0을 반환한다."""
+        import logging
+
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(
+            data={"unexpected": "shape"}
+        )
+
+        chunks = [{"chunk_id": 1, "content": "x", "embedding": [0.1] * 1024, "metadata": {}}]
+
+        with caplog.at_level(logging.WARNING, logger="app.clients.supabase_client"):
+            count = await client.replace_document_chunks(1, chunks)
+
+        assert count == 0
+        assert any(
+            "응답 형태가 예상과 다릅니다" in rec.message for rec in caplog.records
+        )
+
+    async def test_returns_zero_for_empty_list(self, supabase_setup):
+        """빈 리스트 응답은 0을 반환한다 (RPC가 0 row 반환한 정상 경로)."""
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(data=[])
+
+        chunks = [{"chunk_id": 1, "content": "x", "embedding": [0.1] * 1024, "metadata": {}}]
+        count = await client.replace_document_chunks(1, chunks)
+
+        assert count == 0
+
+    async def test_returns_zero_for_none_data(self, supabase_setup):
+        """RPC가 None 또는 빈 데이터를 반환하면 0."""
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(data=None)
+
+        chunks = [{"chunk_id": 1, "content": "x", "embedding": [0.1] * 1024, "metadata": {}}]
+        count = await client.replace_document_chunks(1, chunks)
+
+        assert count == 0
+
+    async def test_rpc_failure_propagates(self, supabase_setup):
+        """RPC 실패는 호출자로 전파된다 (트랜잭션 롤백은 DB 측 책임)."""
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.side_effect = Exception("RPC failed")
+
+        chunks = [{"chunk_id": 1, "content": "x", "embedding": [0.1] * 1024, "metadata": {}}]
+
+        with pytest.raises(Exception, match="RPC failed"):
+            await client.replace_document_chunks(1, chunks)
+
+
 # ── delete_document_chunks 테스트 ──
 
 

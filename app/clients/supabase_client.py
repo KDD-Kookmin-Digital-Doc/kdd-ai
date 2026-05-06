@@ -143,6 +143,57 @@ class SupabaseVectorClient:
         )
         return len(result.data or [])
 
+    async def replace_document_chunks(
+        self, doc_id: int, chunks: list[dict]
+    ) -> int:
+        """단일 트랜잭션 내에서 기존 청크/관련 캐시 삭제 후 새 청크 삽입.
+
+        Supabase RPC `replace_document_chunks`를 호출한다. INSERT 실패 시 DELETE도
+        자동 롤백되어 데이터 손실이 발생하지 않는다 (이슈 #43).
+
+        chunks가 비어 있으면 RPC를 호출하지 않고 0을 반환한다 (no-op).
+        문서를 비우려는 의도라면 `delete_document_chunks`를 사용한다.
+        """
+        if not chunks:
+            return 0
+        result = await self._run_with_timeout(
+            lambda: self._client.rpc(
+                "replace_document_chunks",
+                {"p_doc_id": doc_id, "p_chunks": chunks},
+            ).execute()
+        )
+        return self._parse_replace_count(result.data)
+
+    @staticmethod
+    def _parse_replace_count(data: object) -> int:
+        """replace_document_chunks RPC 응답에서 inserted_count 추출.
+
+        PostgREST는 RETURNS INT를 다음 형태 중 하나로 직렬화할 수 있다:
+        - `int` (스칼라)
+        - `[N]` (단일 정수 리스트)
+        - `[{"replace_document_chunks": N}]` (이름 있는 컬럼 형태, 일반적)
+
+        명시적 키를 우선 추출해 PostgREST 버전 차이로 키 순서가 바뀌어도
+        엉뚱한 값이 잡히지 않도록 한다. 알 수 없는 형태는 0 대신 경고 로그를
+        남겨 silent data loss를 방지한다.
+        """
+        if isinstance(data, int):
+            return data
+        if isinstance(data, list) and data:
+            first = data[0]
+            if isinstance(first, dict):
+                if "replace_document_chunks" in first:
+                    return int(first["replace_document_chunks"])
+                if first:
+                    return int(next(iter(first.values())))
+                return 0
+            if isinstance(first, int):
+                return first
+        logger.warning(
+            "replace_document_chunks RPC 응답 형태가 예상과 다릅니다: %r", data
+        )
+        return 0
+
     async def delete_document_chunks(self, doc_id: int) -> int:
         """doc_id에 해당하는 모든 청크 삭제. 삭제된 행 수 반환."""
         result = await self._run_with_timeout(
