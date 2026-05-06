@@ -10,6 +10,7 @@ import logging
 from app.clients.bedrock import BedrockClient
 from app.config import Settings
 from app.models.pipeline import PipelineContext
+from app.pipeline._messages import make_user_message
 
 logger = logging.getLogger(__name__)
 
@@ -87,12 +88,12 @@ async def classify_intent(
         settings.INTENT_HISTORY_TURNS,
         settings.INTENT_HISTORY_CHARS_PER_TURN,
     )
-    messages = [{"role": "user", "content": [{"text": user_text}]}]
+    messages = [make_user_message(user_text)]
 
     response, usage = await bedrock.invoke_llm(
         system_prompt=_INTENT_SYSTEM_PROMPT,
         messages=messages,
-        max_tokens=16,
+        max_tokens=settings.INTENT_MAX_TOKENS,
     )
 
     logger.debug(
@@ -112,9 +113,7 @@ async def classify_intent(
             cleaned,
         )
 
-    context.token_usage.prompt_tokens += usage.prompt_tokens
-    context.token_usage.completion_tokens += usage.completion_tokens
-    context.token_usage.total_tokens += usage.total_tokens
+    context.token_usage.accumulate(usage)
 
     logger.info(
         "의도 분류 완료: %r → %s (토큰: %d, history=%d)",

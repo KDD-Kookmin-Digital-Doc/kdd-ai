@@ -112,10 +112,12 @@ class SupabaseVectorClient:
         self,
         embedding: list[float],
         top_k: int = 3,
+        threshold: float = 0.0,
     ) -> list[str]:
         """answer_cache에서 유사 질문 추출 (Fallback용).
 
-        임계값 없이 상위 top_k개 반환.
+        ``threshold`` 이상 유사도를 가진 질문만 상위 ``top_k`` 개 반환 (이슈 #46).
+        기본값 0.0 은 후방 호환성 유지 (모든 질문 매칭).
         """
         result = await self._run_with_timeout(
             lambda: self._client.rpc(
@@ -123,6 +125,7 @@ class SupabaseVectorClient:
                 {
                     "query_embedding": embedding,
                     "match_count": top_k,
+                    "match_threshold": threshold,
                 },
             ).execute()
         )

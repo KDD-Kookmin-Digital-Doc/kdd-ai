@@ -14,6 +14,12 @@ class TokenUsage:
     completion_tokens: int = 0
     total_tokens: int = 0
 
+    def accumulate(self, other: "TokenUsage") -> None:
+        """다른 TokenUsage 의 값을 in-place 로 합산한다 (PR-R2)."""
+        self.prompt_tokens += other.prompt_tokens
+        self.completion_tokens += other.completion_tokens
+        self.total_tokens += other.total_tokens
+
 
 @dataclass
 class SearchResult:
@@ -34,6 +40,26 @@ class SourceDoc:
     chunk_id: int
     doc_name: str
     page: int
+
+    @classmethod
+    def from_cache_dict(cls, d: dict) -> "SourceDoc":
+        """answer_cache.sources JSONB 의 dict 한 개를 SourceDoc 으로 변환 (PR-R3)."""
+        return cls(
+            doc_id=d["doc_id"],
+            chunk_id=d["chunk_id"],
+            doc_name=d["doc_name"],
+            page=d["page"],
+        )
+
+    @classmethod
+    def from_search_result(cls, r: "SearchResult") -> "SourceDoc":
+        """벡터 검색 SearchResult 한 개를 SourceDoc 으로 변환 (PR-R3)."""
+        return cls(
+            doc_id=r.doc_id,
+            chunk_id=r.chunk_id,
+            doc_name=r.metadata.get("doc_name", ""),
+            page=r.metadata.get("page", 0),
+        )
 
 
 @dataclass

@@ -46,25 +46,18 @@ async def search_documents(
 
     results = await supabase.search_documents(
         embedding=question_embedding,
-        top_k=5,
+        top_k=settings.VECTOR_SEARCH_TOP_K,
         threshold=settings.SIMILARITY_THRESHOLD,
     )
 
-    context.search_results = []
-    context.source_docs = []
-    context.suggested_questions = []
-
+    # PR-R7: 두 분기 모두에서 search_results/source_docs/suggested_questions 를
+    # 명시적으로 set 한다. 이전엔 함수 진입 직후 빈 list 로 사전 할당 후 분기
+    # 내에서 일부만 갱신했는데, "분기마다 끝났을 때의 컨텍스트 상태"가 한 곳에
+    # 모이도록 정리.
     if results:
         context.search_results = results
-        context.source_docs = [
-            SourceDoc(
-                doc_id=r.doc_id,
-                chunk_id=r.chunk_id,
-                doc_name=r.metadata.get("doc_name", ""),
-                page=r.metadata.get("page", 0),
-            )
-            for r in results
-        ]
+        context.source_docs = [SourceDoc.from_search_result(r) for r in results]
+        context.suggested_questions = []
         logger.info(
             "벡터 검색 성공: %d건 (최고 유사도=%.4f)",
             len(results),
@@ -73,8 +66,11 @@ async def search_documents(
     else:
         suggested = await supabase.search_similar_questions(
             embedding=question_embedding,
-            top_k=3,
+            top_k=settings.FALLBACK_SUGGESTED_COUNT,
+            threshold=settings.FALLBACK_SIMILARITY_THRESHOLD,
         )
+        context.search_results = []
+        context.source_docs = []
         context.suggested_questions = suggested
         logger.info(
             "벡터 검색 폴백: 임계값(%.2f) 이상 문서 없음, 유사 질문 %d건 추출",

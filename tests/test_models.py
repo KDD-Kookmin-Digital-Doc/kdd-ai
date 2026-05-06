@@ -52,6 +52,15 @@ class TestSettings:
         assert s.SUPABASE_TIMEOUT == 10
         assert s.CACHE_TTL_DAYS == 90
         assert s.LOG_LEVEL == "INFO"
+        # PR-R5 매직넘버 settings화 + 이슈 #46 fallback threshold
+        assert s.VECTOR_SEARCH_TOP_K == 5
+        assert s.FALLBACK_SUGGESTED_COUNT == 3
+        assert s.REWRITE_MAX_TOKENS == 512
+        assert s.INTENT_MAX_TOKENS == 16
+        assert s.CHITCHAT_MAX_TOKENS == 256
+        assert s.FAQ_LLM_MAX_TOKENS == 512
+        assert s.BEDROCK_MAX_RETRIES == 2
+        assert s.FALLBACK_SIMILARITY_THRESHOLD == 0.5
 
     def test_log_level_normalized_to_upper(self, monkeypatch):
         """LOG_LEVEL 은 대소문자 무관하게 받아들여 대문자로 정규화된다."""
@@ -68,6 +77,89 @@ class TestSettings:
         monkeypatch.setenv("LOG_LEVEL", "VERBOSE")
         with pytest.raises(ValidationError):
             Settings(_env_file=None)
+
+
+# ── PR-R2: TokenUsage.accumulate ──
+
+
+class TestTokenUsageAccumulate:
+    def test_accumulate_adds_in_place(self):
+        a = TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        b = TokenUsage(prompt_tokens=3, completion_tokens=2, total_tokens=5)
+        a.accumulate(b)
+        assert a.prompt_tokens == 13
+        assert a.completion_tokens == 7
+        assert a.total_tokens == 20
+
+    def test_accumulate_zero_is_noop(self):
+        a = TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        a.accumulate(TokenUsage())
+        assert (a.prompt_tokens, a.completion_tokens, a.total_tokens) == (10, 5, 15)
+
+
+# ── PR-R3: SourceDoc 변환 헬퍼 ──
+
+
+class TestSourceDocFromHelpers:
+    def test_from_cache_dict(self):
+        d = {"doc_id": 1, "chunk_id": 42, "doc_name": "학사요람.pdf", "page": 45}
+        s = SourceDoc.from_cache_dict(d)
+        assert s.doc_id == 1
+        assert s.chunk_id == 42
+        assert s.doc_name == "학사요람.pdf"
+        assert s.page == 45
+
+    def test_from_search_result(self):
+        r = SearchResult(
+            chunk_id=111,
+            doc_id=2,
+            content="제1조 내용",
+            metadata={"doc_name": "학칙.pdf", "page": 10},
+            similarity_score=0.85,
+        )
+        s = SourceDoc.from_search_result(r)
+        assert s.doc_id == 2
+        assert s.chunk_id == 111
+        assert s.doc_name == "학칙.pdf"
+        assert s.page == 10
+
+    def test_from_search_result_missing_metadata_uses_defaults(self):
+        r = SearchResult(
+            chunk_id=1,
+            doc_id=1,
+            content="x",
+            metadata={},
+            similarity_score=0.1,
+        )
+        s = SourceDoc.from_search_result(r)
+        assert s.doc_name == ""
+        assert s.page == 0
+
+
+# ── PR-R4: 메시지 헬퍼 ──
+
+
+class TestMessageHelpers:
+    def test_make_text_content(self):
+        from app.pipeline._messages import make_text_content
+
+        assert make_text_content("안녕") == [{"text": "안녕"}]
+
+    def test_make_user_message(self):
+        from app.pipeline._messages import make_user_message
+
+        assert make_user_message("질문") == {
+            "role": "user",
+            "content": [{"text": "질문"}],
+        }
+
+    def test_make_assistant_message(self):
+        from app.pipeline._messages import make_assistant_message
+
+        assert make_assistant_message("답변") == {
+            "role": "assistant",
+            "content": [{"text": "답변"}],
+        }
 
     def test_required_fields_missing(self, monkeypatch):
         monkeypatch.delenv("SUPABASE_URL", raising=False)

@@ -78,7 +78,7 @@ class TestEmptyHistoryPreservesQuestion:
         bedrock = _create_bedrock()
 
         ctx = _make_context(question=question, history=[])
-        result = await rewrite_query(ctx, bedrock)
+        result = await rewrite_query(ctx, bedrock, _create_settings())
 
         assert result.rewritten_question == question
         bedrock.invoke_llm.assert_not_called()
@@ -90,7 +90,7 @@ class TestEmptyHistoryPreservesQuestion:
         bedrock = _create_bedrock()
 
         ctx = _make_context(question=question, history=[])
-        result = await rewrite_query(ctx, bedrock)
+        result = await rewrite_query(ctx, bedrock, _create_settings())
 
         assert result.token_usage.prompt_tokens == 0
         assert result.token_usage.completion_tokens == 0
@@ -114,7 +114,7 @@ class TestHistoryTriggersRewrite:
         history = _make_history(n_turns)
 
         ctx = _make_context(question=question, history=history)
-        await rewrite_query(ctx, bedrock)
+        await rewrite_query(ctx, bedrock, _create_settings())
 
         bedrock.invoke_llm.assert_called_once()
 
@@ -129,7 +129,7 @@ class TestHistoryTriggersRewrite:
         history = [] if is_empty else _make_history(2)
 
         ctx = _make_context(question=question, history=history)
-        await rewrite_query(ctx, bedrock)
+        await rewrite_query(ctx, bedrock, _create_settings())
 
         if is_empty:
             bedrock.invoke_llm.assert_not_called()
@@ -149,7 +149,7 @@ class TestRewriteQueryUnit:
             history=_make_history(2),
         )
 
-        result = await rewrite_query(ctx, bedrock)
+        result = await rewrite_query(ctx, bedrock, _create_settings())
 
         assert result.rewritten_question == "휴학 기간은 최대 몇 년인가요?"
 
@@ -158,7 +158,7 @@ class TestRewriteQueryUnit:
         bedrock = _create_bedrock(rewritten="  재작성된 질문  \n")
         ctx = _make_context(question="질문", history=_make_history(2))
 
-        result = await rewrite_query(ctx, bedrock)
+        result = await rewrite_query(ctx, bedrock, _create_settings())
 
         assert result.rewritten_question == "재작성된 질문"
 
@@ -167,7 +167,7 @@ class TestRewriteQueryUnit:
         bedrock = _create_bedrock(rewritten=" \n\t ")
         ctx = _make_context(question="원본 질문", history=_make_history(2))
 
-        result = await rewrite_query(ctx, bedrock)
+        result = await rewrite_query(ctx, bedrock, _create_settings())
 
         assert result.rewritten_question == "원본 질문"
 
@@ -179,7 +179,7 @@ class TestRewriteQueryUnit:
         ctx.token_usage.completion_tokens = 5
         ctx.token_usage.total_tokens = 15
 
-        result = await rewrite_query(ctx, bedrock)
+        result = await rewrite_query(ctx, bedrock, _create_settings())
 
         assert result.token_usage.prompt_tokens == 110
         assert result.token_usage.completion_tokens == 35
@@ -191,7 +191,7 @@ class TestRewriteQueryUnit:
         original = "원본 질문"
         ctx = _make_context(question=original, history=_make_history(2))
 
-        result = await rewrite_query(ctx, bedrock)
+        result = await rewrite_query(ctx, bedrock, _create_settings())
 
         assert result.original_question == original
         assert result.rewritten_question == "재작성된 질문"
@@ -201,7 +201,7 @@ class TestRewriteQueryUnit:
         bedrock = _create_bedrock()
         ctx = _make_context(question="질문", history=_make_history(2))
 
-        await rewrite_query(ctx, bedrock)
+        await rewrite_query(ctx, bedrock, _create_settings())
 
         call_kwargs = bedrock.invoke_llm.call_args
         assert "system_prompt" in call_kwargs.kwargs
@@ -216,7 +216,7 @@ class TestRewriteQueryUnit:
         ]
         ctx = _make_context(question="기간은?", history=history)
 
-        await rewrite_query(ctx, bedrock)
+        await rewrite_query(ctx, bedrock, _create_settings())
 
         call_kwargs = bedrock.invoke_llm.call_args
         messages = call_kwargs.kwargs["messages"]
@@ -272,7 +272,7 @@ class TestExclusionTransitionRule:
             question="그거 말고 복학은 어떻게 해?", history=history
         )
 
-        await rewrite_query(ctx, bedrock)
+        await rewrite_query(ctx, bedrock, _create_settings())
 
         system_prompt = bedrock.invoke_llm.call_args.kwargs["system_prompt"]
         assert "말고" in system_prompt
