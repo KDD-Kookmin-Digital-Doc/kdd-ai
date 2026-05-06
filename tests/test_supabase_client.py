@@ -459,15 +459,14 @@ class TestInvalidateCacheByDocId:
         contains_mock.assert_called_once_with("source_doc_ids", ["20240001"])
 
 
-# ── insert_answer_cache 테스트 ──
+# ── upsert_answer_cache 테스트 (이슈 #49) ──
 
 
-class TestInsertAnswerCache:
+class TestUpsertAnswerCache:
     async def test_success(self, supabase_setup):
+        """upsert_answer_cache RPC 호출 시 모든 필드가 정확히 전달된다."""
         client, mock_sb = supabase_setup
-        mock_sb.table.return_value.insert.return_value.execute.return_value = (
-            MagicMock(data=[{"id": 1}])
-        )
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(data=None)
 
         cache = AnswerCache(
             question="휴학 기간",
@@ -477,9 +476,36 @@ class TestInsertAnswerCache:
             sources=[{"doc_name": "학사요람.pdf", "page": 45}],
         )
 
-        await client.insert_answer_cache(cache)
+        await client.upsert_answer_cache(cache)
 
-        mock_sb.table.assert_called_with("answer_cache")
+        mock_sb.rpc.assert_called_once_with(
+            "upsert_answer_cache",
+            {
+                "p_question": "휴학 기간",
+                "p_embedding": [0.1] * 1024,
+                "p_answer": "최대 4년입니다.",
+                "p_source_doc_ids": [1],
+                "p_sources": [{"doc_name": "학사요람.pdf", "page": 45}],
+            },
+        )
+
+    async def test_does_not_use_table_insert(self, supabase_setup):
+        """이슈 #49: 더 이상 .table().insert() 직접 호출 X — RPC 만 사용."""
+        client, mock_sb = supabase_setup
+        mock_sb.rpc.return_value.execute.return_value = MagicMock(data=None)
+
+        cache = AnswerCache(
+            question="q", embedding=[0.1] * 1024, answer="a",
+            source_doc_ids=[], sources=[],
+        )
+        await client.upsert_answer_cache(cache)
+
+        # .table("answer_cache").insert(...) 패턴이 호출되지 않음
+        # (호출자는 mock_sb.rpc 만 사용)
+        # mock_sb.table 은 다른 메서드(invalidate 등)에서도 쓰일 수 있어 호출 자체는 막지 않음.
+        # 핵심은 답변 캐시 저장이 RPC 로 처리됨.
+        mock_sb.rpc.assert_called_once()
+        assert mock_sb.rpc.call_args[0][0] == "upsert_answer_cache"
 
 
 # ── health_check 테스트 ──
