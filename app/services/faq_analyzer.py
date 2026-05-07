@@ -111,7 +111,11 @@ async def analyze_faq(
 
     candidates: list[dict] = []
     for cluster, result in zip(top_clusters, results, strict=True):
-        if isinstance(result, Exception):
+        if isinstance(result, BaseException):
+            # gather(return_exceptions=True) 는 inner CancelledError 도 결과로 wrap.
+            # caller 일관성을 위해 cancel 은 재전파 (응답 자체가 폐기됨).
+            if isinstance(result, asyncio.CancelledError):
+                raise result
             logger.warning(
                 "FAQ 답변 초안 생성 실패 (질문: %r): %s",
                 cluster["representative_question"],

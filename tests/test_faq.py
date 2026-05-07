@@ -330,6 +330,8 @@ class TestParallelization:
         )
 
         assert bedrock.invoke_llm.call_count == len(candidates)
+        # 정렬 검증이 trivially pass 하지 않도록 cluster 2개 이상 보장
+        assert len(candidates) >= 2, "정렬 검증 의미 있으려면 cluster 2개 이상 필요"
         # 빈도 내림차순 보존 (gather 결과 매핑이 순서를 깨뜨리지 않음)
         for i in range(len(candidates) - 1):
             assert candidates[i]["frequency"] >= candidates[i + 1]["frequency"]
@@ -410,3 +412,33 @@ class TestParallelization:
         assert len(candidates) >= 2
         # FAQ_CONCURRENCY=1 → 직렬 강제 → 동시 진입 정확히 1
         assert max_in_flight == 1
+
+    async def test_inner_cancelled_error_propagates(self):
+        """inner task의 CancelledError 는 caller 로 re-raise 됨 (응답 깨짐 방지).
+
+        gather(return_exceptions=True) 가 CancelledError 도 결과로 wrap 하므로,
+        BaseException 가드가 약화되면 draft_answer 자리에 CancelledError 객체가
+        들어가 JSON 직렬화 시 응답 전체가 깨질 수 있음. 본 테스트가 회귀 잠금.
+        """
+        settings = _create_settings()
+        bedrock = _create_bedrock(n_questions=6)
+        supabase = _create_supabase()
+
+        # _create_bedrock(n=6) 은 cluster 2개 → invoke_llm 2회 호출 (각 cluster 1회).
+        # 어느 호출이든 CancelledError 가 caller 로 propagate 되는지가 핵심.
+        bedrock.invoke_llm.side_effect = [
+            ("정상 답변", TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2)),
+            asyncio.CancelledError(),
+            ("여분", TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2)),
+        ]
+
+        questions = [f"질문 {i}" for i in range(6)]
+        with pytest.raises(asyncio.CancelledError):
+            await analyze_faq(
+                questions=questions,
+                top_k=10,
+                min_cluster_size=2,
+                bedrock=bedrock,
+                supabase=supabase,
+                settings=settings,
+            )
