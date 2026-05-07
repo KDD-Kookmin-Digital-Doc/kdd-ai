@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from unittest.mock import AsyncMock, patch
 
@@ -304,3 +305,108 @@ class TestAnalyzeFAQUnit:
         assert result["status"] == "success"
         assert "candidates" in result
         assert isinstance(result["candidates"], list)
+
+
+# ── 병렬화 회귀 테스트 (R8) ──
+
+
+class TestParallelization:
+    """답변 초안 생성이 병렬화 + 동시성 제한 + 부분 실패 처리되는지 검증."""
+
+    async def test_invoke_llm_called_per_cluster_in_order(self):
+        """클러스터 수만큼 invoke_llm 호출 + 빈도순 정렬 보존."""
+        settings = _create_settings()
+        bedrock = _create_bedrock(n_questions=8)
+        supabase = _create_supabase()
+
+        questions = [f"질문 {i}" for i in range(8)]
+        candidates = await analyze_faq(
+            questions=questions,
+            top_k=10,
+            min_cluster_size=2,
+            bedrock=bedrock,
+            supabase=supabase,
+            settings=settings,
+        )
+
+        assert bedrock.invoke_llm.call_count == len(candidates)
+        # 빈도 내림차순 보존 (gather 결과 매핑이 순서를 깨뜨리지 않음)
+        for i in range(len(candidates) - 1):
+            assert candidates[i]["frequency"] >= candidates[i + 1]["frequency"]
+
+    async def test_partial_failure_placeholder(self, caplog):
+        """일부 cluster 실패 시 나머지는 정상 + 실패는 placeholder + warning."""
+        settings = _create_settings()
+        bedrock = _create_bedrock(n_questions=6)
+        supabase = _create_supabase()
+
+        # 두 번째 호출만 실패 (호출 순서는 비결정적이지만 1개는 반드시 실패)
+        bedrock.invoke_llm.side_effect = [
+            ("정상 답변 1", TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15)),
+            RuntimeError("Bedrock throttle"),
+            ("정상 답변 2", TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15)),
+            ("정상 답변 3", TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15)),
+            ("정상 답변 4", TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15)),
+        ]
+
+        questions = [f"질문 {i}" for i in range(6)]
+        with caplog.at_level("WARNING", logger="app.services.faq_analyzer"):
+            candidates = await analyze_faq(
+                questions=questions,
+                top_k=10,
+                min_cluster_size=2,
+                bedrock=bedrock,
+                supabase=supabase,
+                settings=settings,
+            )
+
+        failed = [c for c in candidates if c["draft_answer"].startswith("답변 초안 생성 실패")]
+        succeeded = [c for c in candidates if not c["draft_answer"].startswith("답변 초안 생성 실패")]
+
+        assert len(failed) == 1
+        assert "RuntimeError" in failed[0]["draft_answer"]
+        assert len(succeeded) >= 1
+        assert any("FAQ 답변 초안 생성 실패" in rec.message for rec in caplog.records)
+
+    async def test_concurrency_capped_by_semaphore(self):
+        """FAQ_CONCURRENCY=1 시 직렬 강제 — Semaphore가 실제로 동시성 제한 적용."""
+        settings = _create_settings()
+        # FAQ_CONCURRENCY=1 → invoke_llm 동시 진입 정확히 1개로 강제
+        object.__setattr__(settings, "FAQ_CONCURRENCY", 1)
+
+        bedrock = _create_bedrock(n_questions=8)
+        supabase = _create_supabase()
+
+        in_flight = 0
+        max_in_flight = 0
+
+        async def _slow_invoke(*args, **kwargs):
+            nonlocal in_flight, max_in_flight
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+            try:
+                # 다른 task 가 Semaphore 를 못 받아 대기 중인지 확인할 시간
+                await asyncio.sleep(0.01)
+                return (
+                    "답변",
+                    TokenUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                )
+            finally:
+                in_flight -= 1
+
+        bedrock.invoke_llm.side_effect = _slow_invoke
+
+        questions = [f"질문 {i}" for i in range(8)]
+        candidates = await analyze_faq(
+            questions=questions,
+            top_k=10,
+            min_cluster_size=2,
+            bedrock=bedrock,
+            supabase=supabase,
+            settings=settings,
+        )
+
+        # 클러스터 2개 이상 형성돼야 동시성 제한이 의미 있음
+        assert len(candidates) >= 2
+        # FAQ_CONCURRENCY=1 → 직렬 강제 → 동시 진입 정확히 1
+        assert max_in_flight == 1

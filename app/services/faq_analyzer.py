@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import hdbscan
@@ -90,16 +91,35 @@ async def analyze_faq(
     clusters.sort(key=lambda c: c["frequency"], reverse=True)
     top_clusters = clusters[:top_k]
 
-    # 5. 대표 질문별 답변 초안 생성
+    # 5. 대표 질문별 답변 초안 생성 (병렬 + Semaphore burst 가드)
+    semaphore = asyncio.Semaphore(settings.FAQ_CONCURRENCY)
+
+    async def _bounded_draft(cluster: dict) -> str:
+        async with semaphore:
+            return await _generate_draft_answer(
+                question=cluster["representative_question"],
+                embedding=cluster["representative_embedding"],
+                bedrock=bedrock,
+                supabase=supabase,
+                settings=settings,
+            )
+
+    results = await asyncio.gather(
+        *(_bounded_draft(c) for c in top_clusters),
+        return_exceptions=True,
+    )
+
     candidates: list[dict] = []
-    for cluster in top_clusters:
-        draft_answer = await _generate_draft_answer(
-            question=cluster["representative_question"],
-            embedding=cluster["representative_embedding"],
-            bedrock=bedrock,
-            supabase=supabase,
-            settings=settings,
-        )
+    for cluster, result in zip(top_clusters, results, strict=True):
+        if isinstance(result, Exception):
+            logger.warning(
+                "FAQ 답변 초안 생성 실패 (질문: %r): %s",
+                cluster["representative_question"],
+                result,
+            )
+            draft_answer = f"답변 초안 생성 실패: {type(result).__name__}"
+        else:
+            draft_answer = result
         candidates.append({
             "question": cluster["representative_question"],
             "draft_answer": draft_answer,

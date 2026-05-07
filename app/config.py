@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     CHITCHAT_MAX_TOKENS: int = Field(default=256, gt=0)
     FAQ_LLM_MAX_TOKENS: int = Field(default=512, gt=0)
     BEDROCK_MAX_RETRIES: int = Field(default=2, ge=0)
+    # FAQ 답변 초안 생성 시 동시 LLM 호출 수 (Bedrock throttling 가드)
+    FAQ_CONCURRENCY: int = Field(default=5, gt=0)
 
     # confidence 임계값
     CONFIDENCE_HIGH_THRESHOLD: float = 0.9
