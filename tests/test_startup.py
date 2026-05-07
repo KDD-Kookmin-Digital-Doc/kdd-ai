@@ -19,7 +19,7 @@ def _create_settings(embedding_dimension: int = 1024) -> Settings:
         "SUPABASE_URL": "https://test.supabase.co",
         "SUPABASE_KEY": "test-key",
         "EMBEDDING_DIMENSION": str(embedding_dimension),
-    }):
+    }, clear=True):
         return Settings(_env_file=None)
 
 

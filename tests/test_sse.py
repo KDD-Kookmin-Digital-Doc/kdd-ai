@@ -27,10 +27,15 @@ from app.streaming.sse import (
 # ── 헬퍼 ──
 
 
-def _create_settings() -> Settings:
-    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
-    os.environ.setdefault("SUPABASE_KEY", "test-key")
-    return Settings(_env_file=None)
+def _create_settings(**overrides: str) -> Settings:
+    env = {
+        "SUPABASE_URL": "https://test.supabase.co",
+        "SUPABASE_KEY": "test-key",
+        **overrides,
+    }
+    # clear=True: CI/로컬 셸에 남아있는 환경변수가 테스트로 새는 것을 차단
+    with patch.dict(os.environ, env, clear=True):
+        return Settings(_env_file=None)
 
 
 def _create_bedrock(tokens: list[str] | None = None) -> AsyncMock:
@@ -388,15 +393,12 @@ class TestDetermineConfidence:
 
     def test_custom_thresholds(self):
         """settings에서 커스텀 임계값을 사용한다."""
-        with patch.dict(os.environ, {
-            "SUPABASE_URL": "https://test.supabase.co",
-            "SUPABASE_KEY": "test-key",
-            "CONFIDENCE_HIGH_THRESHOLD": "0.95",
-            "CONFIDENCE_MEDIUM_THRESHOLD": "0.85",
-        }):
-            settings = Settings(_env_file=None)
-            results = [_make_search_result(similarity=0.9)]
-            assert _determine_confidence(results, settings) == "medium"
+        settings = _create_settings(
+            CONFIDENCE_HIGH_THRESHOLD="0.95",
+            CONFIDENCE_MEDIUM_THRESHOLD="0.85",
+        )
+        results = [_make_search_result(similarity=0.9)]
+        assert _determine_confidence(results, settings) == "medium"
 
 
 # ── 토큰 버퍼링 테스트 ──

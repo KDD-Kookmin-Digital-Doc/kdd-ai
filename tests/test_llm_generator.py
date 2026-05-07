@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import AsyncMock, PropertyMock
+from unittest.mock import AsyncMock, PropertyMock, patch
 
 from hypothesis import given, settings as hyp_settings
 from hypothesis import strategies as st
@@ -23,10 +23,15 @@ from app.pipeline.llm_generator import (
 # ── 헬퍼 ──
 
 
-def _create_settings() -> Settings:
-    os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
-    os.environ.setdefault("SUPABASE_KEY", "test-key")
-    return Settings(_env_file=None)
+def _create_settings(**overrides: str) -> Settings:
+    env = {
+        "SUPABASE_URL": "https://test.supabase.co",
+        "SUPABASE_KEY": "test-key",
+        **overrides,
+    }
+    # clear=True: CI/로컬 셸에 남아있는 환경변수가 테스트로 새는 것을 차단
+    with patch.dict(os.environ, env, clear=True):
+        return Settings(_env_file=None)
 
 
 def _create_bedrock(tokens: list[str] | None = None) -> AsyncMock:
