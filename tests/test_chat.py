@@ -31,7 +31,7 @@ def _create_settings() -> Settings:
     with patch.dict(os.environ, {
         "SUPABASE_URL": "https://test.supabase.co",
         "SUPABASE_KEY": "test-key",
-    }):
+    }, clear=True):
         return Settings(_env_file=None)
 
 

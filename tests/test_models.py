@@ -1,6 +1,7 @@
 """설정 모듈 및 데이터 모델 단위 테스트."""
 
 import os
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
@@ -30,53 +31,60 @@ from app.models.schemas import (
 
 
 class TestSettings:
-    def test_defaults(self, monkeypatch):
-        monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
-        monkeypatch.setenv("SUPABASE_KEY", "test-key")
-        s = Settings(_env_file=None)
-        assert s.BEDROCK_LIGHT_MODEL_ID == "apac.anthropic.claude-3-haiku-20240307-v1:0"
-        assert s.BEDROCK_ANSWER_MODEL_ID == "apac.anthropic.claude-3-5-sonnet-20241022-v2:0"
-        assert s.BEDROCK_EMBEDDING_MODEL_ID == "global.cohere.embed-v4:0"
-        assert s.EMBEDDING_DIMENSION == 1024
-        assert s.LLM_CONTEXT_WINDOW == 200000
-        assert s.LLM_MAX_TOKENS == 1024
-        assert s.AWS_REGION == "ap-northeast-2"
-        assert s.SIMILARITY_THRESHOLD == 0.75
-        assert s.CACHE_SIMILARITY_THRESHOLD == 0.95
-        assert s.BEDROCK_LLM_TIMEOUT == 30
-        assert s.BEDROCK_EMBEDDING_TIMEOUT == 30
-        assert s.BEDROCK_EMBEDDING_CONNECT_TIMEOUT == 10
-        assert s.EMBED_BATCH_SIZE == 48
-        assert s.INTENT_HISTORY_TURNS == 6
-        assert s.INTENT_HISTORY_CHARS_PER_TURN == 200
-        assert s.SUPABASE_TIMEOUT == 10
-        assert s.CACHE_TTL_DAYS == 90
-        assert s.LOG_LEVEL == "INFO"
-        # PR-R5 매직넘버 settings화 + 이슈 #46 fallback threshold
-        assert s.VECTOR_SEARCH_TOP_K == 5
-        assert s.FALLBACK_SUGGESTED_COUNT == 3
-        assert s.REWRITE_MAX_TOKENS == 512
-        assert s.INTENT_MAX_TOKENS == 16
-        assert s.CHITCHAT_MAX_TOKENS == 256
-        assert s.FAQ_LLM_MAX_TOKENS == 512
-        assert s.BEDROCK_MAX_RETRIES == 2
-        assert s.FALLBACK_SIMILARITY_THRESHOLD == 0.5
+    def test_defaults(self):
+        # clear=True: CI/로컬 셸의 환경변수 leak 차단 — 기본값 검증 정확성 보장
+        with patch.dict(os.environ, {
+            "SUPABASE_URL": "https://test.supabase.co",
+            "SUPABASE_KEY": "test-key",
+        }, clear=True):
+            s = Settings(_env_file=None)
+            assert s.BEDROCK_LIGHT_MODEL_ID == "apac.anthropic.claude-3-haiku-20240307-v1:0"
+            assert s.BEDROCK_ANSWER_MODEL_ID == "apac.anthropic.claude-3-5-sonnet-20241022-v2:0"
+            assert s.BEDROCK_EMBEDDING_MODEL_ID == "global.cohere.embed-v4:0"
+            assert s.EMBEDDING_DIMENSION == 1024
+            assert s.LLM_CONTEXT_WINDOW == 200000
+            assert s.LLM_MAX_TOKENS == 1024
+            assert s.AWS_REGION == "ap-northeast-2"
+            assert s.SIMILARITY_THRESHOLD == 0.75
+            assert s.CACHE_SIMILARITY_THRESHOLD == 0.95
+            assert s.BEDROCK_LLM_TIMEOUT == 30
+            assert s.BEDROCK_EMBEDDING_TIMEOUT == 30
+            assert s.BEDROCK_EMBEDDING_CONNECT_TIMEOUT == 10
+            assert s.EMBED_BATCH_SIZE == 48
+            assert s.INTENT_HISTORY_TURNS == 6
+            assert s.INTENT_HISTORY_CHARS_PER_TURN == 200
+            assert s.SUPABASE_TIMEOUT == 10
+            assert s.CACHE_TTL_DAYS == 90
+            assert s.LOG_LEVEL == "INFO"
+            # PR-R5 매직넘버 settings화 + 이슈 #46 fallback threshold
+            assert s.VECTOR_SEARCH_TOP_K == 5
+            assert s.FALLBACK_SUGGESTED_COUNT == 3
+            assert s.REWRITE_MAX_TOKENS == 512
+            assert s.INTENT_MAX_TOKENS == 16
+            assert s.CHITCHAT_MAX_TOKENS == 256
+            assert s.FAQ_LLM_MAX_TOKENS == 512
+            assert s.BEDROCK_MAX_RETRIES == 2
+            assert s.FALLBACK_SIMILARITY_THRESHOLD == 0.5
 
-    def test_log_level_normalized_to_upper(self, monkeypatch):
+    def test_log_level_normalized_to_upper(self):
         """LOG_LEVEL 은 대소문자 무관하게 받아들여 대문자로 정규화된다."""
-        monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
-        monkeypatch.setenv("SUPABASE_KEY", "test-key")
-        monkeypatch.setenv("LOG_LEVEL", "debug")
-        s = Settings(_env_file=None)
-        assert s.LOG_LEVEL == "DEBUG"
+        with patch.dict(os.environ, {
+            "SUPABASE_URL": "https://test.supabase.co",
+            "SUPABASE_KEY": "test-key",
+            "LOG_LEVEL": "debug",
+        }, clear=True):
+            s = Settings(_env_file=None)
+            assert s.LOG_LEVEL == "DEBUG"
 
-    def test_log_level_invalid_rejected(self, monkeypatch):
+    def test_log_level_invalid_rejected(self):
         """알 수 없는 LOG_LEVEL 은 ValidationError."""
-        monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
-        monkeypatch.setenv("SUPABASE_KEY", "test-key")
-        monkeypatch.setenv("LOG_LEVEL", "VERBOSE")
-        with pytest.raises(ValidationError):
-            Settings(_env_file=None)
+        with patch.dict(os.environ, {
+            "SUPABASE_URL": "https://test.supabase.co",
+            "SUPABASE_KEY": "test-key",
+            "LOG_LEVEL": "VERBOSE",
+        }, clear=True):
+            with pytest.raises(ValidationError):
+                Settings(_env_file=None)
 
 
 # ── PR-R2: TokenUsage.accumulate ──
