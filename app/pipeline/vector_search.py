@@ -117,13 +117,28 @@ async def _apply_rerank(
 
     reordered: list[SearchResult] = []
     for idx, score in reranked:
+        if not (0 <= idx < len(results)):
+            logger.warning(
+                "Rerank 인덱스 범위 이탈 (idx=%s, len=%d), 임베딩 fallback",
+                idx,
+                len(results),
+            )
+            return results[: settings.RERANK_TOP_N]
         r = results[idx]
         r.rerank_score = score
         reordered.append(r)
+
+    if not reordered:
+        logger.warning(
+            "Rerank 빈 응답 (stage 1 후보 %d건), 임베딩 fallback",
+            len(results),
+        )
+        return results[: settings.RERANK_TOP_N]
+
     logger.info(
         "Rerank 성공: %d → %d건 (최고 rerank_score=%.4f)",
         len(results),
         len(reordered),
-        reordered[0].rerank_score if reordered else 0.0,
+        reordered[0].rerank_score,
     )
     return reordered

@@ -573,3 +573,66 @@ class TestRerank:
 
         bedrock.rerank.assert_not_called()
         assert result.suggested_questions == ["유사 질문"]
+
+    async def test_out_of_range_index_falls_back(self):
+        """rerank 응답이 범위 밖 인덱스(>= len) 포함 → 임베딩 fallback (IndexError 차단)."""
+        settings = _create_settings(
+            RERANK_ENABLED="True",
+            RETRIEVE_TOP_K_RERANK="5",
+            RERANK_TOP_N="3",
+        )
+        bedrock = _create_bedrock()
+        # 첫 항목은 유효, 두 번째에 out-of-range 99 → 전체 fallback
+        bedrock.rerank.side_effect = None
+        bedrock.rerank.return_value = [(0, 0.9), (99, 0.5)]
+        supabase = _create_supabase(search_results=_make_results(5))
+
+        ctx = _make_context()
+        result = await search_documents(ctx, bedrock, supabase, settings)
+
+        # 임베딩 상위 3건 순서대로 fallback — 챗 요청 자체는 살아있음 (IndexError 차단)
+        # (M3 known: 첫 항목엔 부분 mutation 으로 rerank_score 가 묻을 수 있음 — 별도 이슈)
+        assert [r.chunk_id for r in result.search_results] == [100, 101, 102]
+
+    async def test_negative_index_falls_back(self):
+        """rerank 응답이 음수 인덱스 포함 → 임베딩 fallback (negative wrap-around 차단)."""
+        settings = _create_settings(
+            RERANK_ENABLED="True",
+            RETRIEVE_TOP_K_RERANK="5",
+            RERANK_TOP_N="3",
+        )
+        bedrock = _create_bedrock()
+        bedrock.rerank.side_effect = None
+        bedrock.rerank.return_value = [(-1, 0.9)]
+        supabase = _create_supabase(search_results=_make_results(5))
+
+        ctx = _make_context()
+        result = await search_documents(ctx, bedrock, supabase, settings)
+
+        # Python list 음수 인덱스는 wrap-around 되므로 명시적으로 차단
+        assert [r.chunk_id for r in result.search_results] == [100, 101, 102]
+        # 음수 idx 가 첫 항목이라 mutation 발생 전 차단 — rerank_score 깨끗
+        assert all(r.rerank_score is None for r in result.search_results)
+
+    async def test_empty_rerank_response_falls_back(self):
+        """Cohere 빈 응답 + stage 1 결과 존재 → fallback path 오라우팅 차단."""
+        settings = _create_settings(
+            RERANK_ENABLED="True",
+            RETRIEVE_TOP_K_RERANK="5",
+            RERANK_TOP_N="3",
+        )
+        bedrock = _create_bedrock()
+        bedrock.rerank.side_effect = None
+        bedrock.rerank.return_value = []  # Cohere 빈 응답
+        supabase = _create_supabase(
+            search_results=_make_results(5),
+            similar_questions=["오라우팅되면 안 됨"],
+        )
+
+        ctx = _make_context()
+        result = await search_documents(ctx, bedrock, supabase, settings)
+
+        # silent quality regression 방지 — 임베딩 결과 살리고 suggested_questions 분기로 가지 않음
+        assert len(result.search_results) == 3
+        assert result.suggested_questions == []
+        supabase.search_similar_questions.assert_not_called()
