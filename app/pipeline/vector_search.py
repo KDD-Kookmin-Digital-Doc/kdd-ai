@@ -7,7 +7,7 @@ import logging
 from app.clients.bedrock import BedrockClient
 from app.clients.supabase_client import SupabaseVectorClient
 from app.config import Settings
-from app.models.pipeline import PipelineContext, SourceDoc
+from app.models.pipeline import PipelineContext, SearchResult, SourceDoc
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,10 @@ async def search_documents(
     """질문을 임베딩하여 벡터 검색을 수행하고 PipelineContext를 갱신한다.
 
     - 재작성된 질문(또는 원본)을 Cohere Embed로 1024차원 벡터로 변환.
-    - documents 테이블에서 코사인 유사도 기반 상위 5개 검색.
+    - documents 테이블에서 코사인 유사도 기반 후보 검색.
+    - D1: ``RERANK_ENABLED=True`` 시 stage 1 후보 ``RETRIEVE_TOP_K_RERANK``개 →
+      도쿄 리전 Cohere Rerank 3.5 → stage 2 ``RERANK_TOP_N``개. False 시
+      ``VECTOR_SEARCH_TOP_K``개 단일 단계.
     - 유사도 임계값 이상 문서가 1개 이상 → search_results, source_docs 설정.
     - 모든 문서가 임계값 미만 → Fallback: answer_cache에서 유사 질문 3개 추출.
     """
@@ -44,11 +47,21 @@ async def search_documents(
         )
         question_embedding = embeddings[0]
 
+    # D1: rerank 활성 시 후보를 넓혀야 cross-encoder 가 임베딩이 놓친 문서를 끌어올릴 수
+    # 있음. 비활성 시 기존 동작 (top_k=VECTOR_SEARCH_TOP_K) 그대로.
+    retrieve_top_k = (
+        settings.RETRIEVE_TOP_K_RERANK
+        if settings.RERANK_ENABLED
+        else settings.VECTOR_SEARCH_TOP_K
+    )
     results = await supabase.search_documents(
         embedding=question_embedding,
-        top_k=settings.VECTOR_SEARCH_TOP_K,
+        top_k=retrieve_top_k,
         threshold=settings.SIMILARITY_THRESHOLD,
     )
+
+    if settings.RERANK_ENABLED and results:
+        results = await _apply_rerank(bedrock, question, results, settings)
 
     # PR-R7: 두 분기 모두에서 search_results/source_docs/suggested_questions 를
     # 명시적으로 set 한다. 이전엔 함수 진입 직후 빈 list 로 사전 할당 후 분기
@@ -79,3 +92,38 @@ async def search_documents(
         )
 
     return context
+
+
+async def _apply_rerank(
+    bedrock: BedrockClient,
+    question: str,
+    results: list[SearchResult],
+    settings: Settings,
+) -> list[SearchResult]:
+    """Stage 2: Cohere Rerank 3.5 호출 + 재정렬 + RERANK_TOP_N 슬라이스.
+
+    실패 시 graceful degradation — 임베딩 결과 상위 ``RERANK_TOP_N`` 개로 fallback.
+    검색 자체는 실패시키지 않는다 (rerank 는 품질 향상 layer 일 뿐).
+    """
+    try:
+        reranked = await bedrock.rerank(
+            query=question,
+            documents=[r.content for r in results],
+            top_n=settings.RERANK_TOP_N,
+        )
+    except Exception as exc:
+        logger.warning("Rerank 호출 실패, 임베딩 결과 fallback: %s", exc)
+        return results[: settings.RERANK_TOP_N]
+
+    reordered: list[SearchResult] = []
+    for idx, score in reranked:
+        r = results[idx]
+        r.rerank_score = score
+        reordered.append(r)
+    logger.info(
+        "Rerank 성공: %d → %d건 (최고 rerank_score=%.4f)",
+        len(results),
+        len(reordered),
+        reordered[0].rerank_score if reordered else 0.0,
+    )
+    return reordered

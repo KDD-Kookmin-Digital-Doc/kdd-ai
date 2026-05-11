@@ -65,6 +65,13 @@ class TestSettings:
             assert s.FAQ_LLM_MAX_TOKENS == 512
             assert s.BEDROCK_MAX_RETRIES == 2
             assert s.FALLBACK_SIMILARITY_THRESHOLD == 0.5
+            # D1: Rerank (Task 13)
+            assert s.RERANK_ENABLED is True
+            assert s.RERANK_REGION == "ap-northeast-1"
+            assert s.RERANK_MODEL_ID == "cohere.rerank-v3-5:0"
+            assert s.RETRIEVE_TOP_K_RERANK == 30
+            assert s.RERANK_TOP_N == 5
+            assert s.BEDROCK_RERANK_TIMEOUT == 15
 
     def test_log_level_normalized_to_upper(self):
         """LOG_LEVEL 은 대소문자 무관하게 받아들여 대문자로 정규화된다."""
@@ -85,6 +92,28 @@ class TestSettings:
         }, clear=True):
             with pytest.raises(ValidationError):
                 Settings(_env_file=None)
+
+    def test_rerank_top_n_must_not_exceed_retrieve_top_k(self):
+        """RERANK_TOP_N > RETRIEVE_TOP_K_RERANK 이면 ValidationError (역전 가드)."""
+        with patch.dict(os.environ, {
+            "SUPABASE_URL": "https://test.supabase.co",
+            "SUPABASE_KEY": "test-key",
+            "RERANK_TOP_N": "31",
+            "RETRIEVE_TOP_K_RERANK": "30",
+        }, clear=True):
+            with pytest.raises(ValidationError):
+                Settings(_env_file=None)
+
+    def test_rerank_top_n_equal_retrieve_top_k_ok(self):
+        """경계값 (TOP_N == RETRIEVE_TOP_K) 은 허용."""
+        with patch.dict(os.environ, {
+            "SUPABASE_URL": "https://test.supabase.co",
+            "SUPABASE_KEY": "test-key",
+            "RERANK_TOP_N": "30",
+            "RETRIEVE_TOP_K_RERANK": "30",
+        }, clear=True):
+            s = Settings(_env_file=None)
+            assert s.RERANK_TOP_N == 30 == s.RETRIEVE_TOP_K_RERANK
 
 
 # ── PR-R2: TokenUsage.accumulate ──
@@ -438,6 +467,28 @@ class TestSearchResult:
         )
         assert r.chunk_id == 1
         assert r.similarity_score == 0.85
+
+    def test_rerank_score_default_none(self):
+        """D1: rerank_score 는 RERANK_ENABLED=False 시 채워지지 않도록 default None."""
+        r = SearchResult(
+            chunk_id=1,
+            doc_id=1,
+            content="내용",
+            metadata={},
+            similarity_score=0.8,
+        )
+        assert r.rerank_score is None
+
+    def test_rerank_score_assignable(self):
+        r = SearchResult(
+            chunk_id=1,
+            doc_id=1,
+            content="내용",
+            metadata={},
+            similarity_score=0.8,
+            rerank_score=0.97,
+        )
+        assert r.rerank_score == 0.97
 
 
 class TestSourceDoc:

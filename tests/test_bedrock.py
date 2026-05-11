@@ -24,6 +24,7 @@ def bedrock_client(settings):
         client = BedrockClient(settings)
     client._llm_client = MagicMock()
     client._embedding_client = MagicMock()
+    client._rerank_client = MagicMock()
     return client
 
 
@@ -327,8 +328,8 @@ class TestClientInitialization:
         with patch("app.clients.bedrock.boto3.client") as mock_client:
             BedrockClient(settings)
 
-        # boto3.client가 LLM, 임베딩용으로 두 번 호출됨
-        assert mock_client.call_count == 2
+        # D1 이후 boto3.client 는 LLM/임베딩/rerank 3회 호출
+        assert mock_client.call_count == 3
         embedding_call = mock_client.call_args_list[1]
         embedding_config = embedding_call.kwargs["config"]
 
@@ -350,3 +351,133 @@ class TestClientInitialization:
 
         assert llm_config.read_timeout == 45
         assert llm_config.connect_timeout == 45
+
+    def test_rerank_client_uses_tokyo_region(self, monkeypatch):
+        """D1: Cohere Rerank 3.5 는 Single-region — 도쿄 클라이언트 분리 검증."""
+        monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+        monkeypatch.setenv("SUPABASE_KEY", "test-key")
+        monkeypatch.setenv("AWS_REGION", "ap-northeast-2")
+        monkeypatch.setenv("BEDROCK_RERANK_TIMEOUT", "15")
+        settings = Settings(_env_file=None)
+
+        with patch("app.clients.bedrock.boto3.client") as mock_client:
+            BedrockClient(settings)
+
+        # 3번째 호출이 rerank client (LLM → Embedding → Rerank 순)
+        rerank_call = mock_client.call_args_list[2]
+        rerank_config = rerank_call.kwargs["config"]
+
+        assert rerank_config.region_name == "ap-northeast-1"
+        assert rerank_config.read_timeout == 15
+        assert rerank_config.connect_timeout == 15
+
+
+# ── rerank 테스트 (D1, Task 13) ──
+
+
+class TestRerank:
+    async def test_success_returns_index_score_tuples(self, bedrock_client):
+        """정상 응답을 [(index, relevance_score), ...] 로 파싱."""
+        mock_body = MagicMock()
+        mock_body.read.return_value = json.dumps(
+            {
+                "results": [
+                    {"index": 2, "relevance_score": 0.97},
+                    {"index": 0, "relevance_score": 0.85},
+                    {"index": 1, "relevance_score": 0.12},
+                ]
+            }
+        ).encode()
+        bedrock_client._rerank_client.invoke_model.return_value = {"body": mock_body}
+
+        result = await bedrock_client.rerank(
+            query="휴학 절차",
+            documents=["문서A", "문서B", "문서C"],
+            top_n=3,
+        )
+
+        assert result == [(2, 0.97), (0, 0.85), (1, 0.12)]
+
+    async def test_request_body_shape(self, bedrock_client):
+        """body 에 query/documents/top_n/api_version=2 가 포함된다."""
+        mock_body = MagicMock()
+        mock_body.read.return_value = json.dumps({"results": []}).encode()
+        bedrock_client._rerank_client.invoke_model.return_value = {"body": mock_body}
+
+        await bedrock_client.rerank(
+            query="질문", documents=["A", "B"], top_n=2
+        )
+
+        call_kwargs = bedrock_client._rerank_client.invoke_model.call_args.kwargs
+        body = json.loads(call_kwargs["body"])
+        assert body["query"] == "질문"
+        assert body["documents"] == ["A", "B"]
+        assert body["top_n"] == 2
+        assert body["api_version"] == 2
+        assert call_kwargs["modelId"] == "cohere.rerank-v3-5:0"
+
+    async def test_uses_rerank_client_not_llm_or_embedding(self, bedrock_client):
+        """도쿄 분리 — _llm_client/_embedding_client 는 호출되지 않음."""
+        mock_body = MagicMock()
+        mock_body.read.return_value = json.dumps({"results": []}).encode()
+        bedrock_client._rerank_client.invoke_model.return_value = {"body": mock_body}
+
+        await bedrock_client.rerank(query="q", documents=["d"], top_n=1)
+
+        bedrock_client._rerank_client.invoke_model.assert_called_once()
+        bedrock_client._llm_client.invoke_model.assert_not_called()
+        bedrock_client._embedding_client.invoke_model.assert_not_called()
+
+    async def test_retry_on_throttle_then_success(self, bedrock_client):
+        """ThrottlingException 1회 후 성공 — _retry_async 공유 검증."""
+        mock_body = MagicMock()
+        mock_body.read.return_value = json.dumps(
+            {"results": [{"index": 0, "relevance_score": 0.9}]}
+        ).encode()
+        bedrock_client._rerank_client.invoke_model.side_effect = [
+            _make_client_error(),
+            {"body": mock_body},
+        ]
+
+        with patch("asyncio.sleep"):
+            result = await bedrock_client.rerank(
+                query="q", documents=["d"], top_n=1
+            )
+
+        assert result == [(0, 0.9)]
+        assert bedrock_client._rerank_client.invoke_model.call_count == 2
+
+    async def test_non_retryable_raises_immediately(self, bedrock_client):
+        """ValidationException 등 비재시도 에러는 즉시 raise."""
+        bedrock_client._rerank_client.invoke_model.side_effect = (
+            _make_non_retryable_error()
+        )
+
+        with pytest.raises(ClientError):
+            await bedrock_client.rerank(query="q", documents=["d"], top_n=1)
+
+        assert bedrock_client._rerank_client.invoke_model.call_count == 1
+
+    async def test_retry_exhausted_raises(self, bedrock_client):
+        """재시도 끝까지 throttle → 최종 raise (vector_search 가 잡고 fallback)."""
+        bedrock_client._rerank_client.invoke_model.side_effect = _make_client_error()
+
+        with patch("asyncio.sleep"):
+            with pytest.raises(ClientError):
+                await bedrock_client.rerank(
+                    query="q", documents=["d"], top_n=1
+                )
+
+        assert bedrock_client._rerank_client.invoke_model.call_count == 3  # 1 + 2 retries
+
+    async def test_empty_results_returns_empty_list(self, bedrock_client):
+        """results=[] 응답 — Cohere 가 빈 결과 반환 시 [] 반환."""
+        mock_body = MagicMock()
+        mock_body.read.return_value = json.dumps({"results": []}).encode()
+        bedrock_client._rerank_client.invoke_model.return_value = {"body": mock_body}
+
+        result = await bedrock_client.rerank(
+            query="q", documents=["A", "B"], top_n=2
+        )
+
+        assert result == []

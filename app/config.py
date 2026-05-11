@@ -56,6 +56,19 @@ class Settings(BaseSettings):
     CONFIDENCE_HIGH_THRESHOLD: float = 0.9
     CONFIDENCE_MEDIUM_THRESHOLD: float = 0.8
 
+    # Rerank 설정 (D1, Task 13)
+    # Cohere Rerank 3.5 는 Single-region only — 도쿄(ap-northeast-1) 선택 (서울 RTT ~30ms).
+    # RERANK_ENABLED=False 시 두 단계 retrieval 미사용, VECTOR_SEARCH_TOP_K 만 사용.
+    RERANK_ENABLED: bool = True
+    RERANK_REGION: str = "ap-northeast-1"
+    RERANK_MODEL_ID: str = "cohere.rerank-v3-5:0"
+    # Stage 1 (임베딩) 후보 수. RERANK_ENABLED=True 일 때만 사용.
+    RETRIEVE_TOP_K_RERANK: int = Field(default=30, gt=0)
+    # Stage 2 (리랭크) 최종 컨텍스트 개수.
+    RERANK_TOP_N: int = Field(default=5, gt=0)
+    # Rerank API timeout (도쿄 RTT + 모델 처리 여유).
+    BEDROCK_RERANK_TIMEOUT: int = 15
+
     @model_validator(mode="after")
     def _validate_confidence_thresholds(self) -> "Settings":
         med = self.CONFIDENCE_MEDIUM_THRESHOLD
@@ -64,6 +77,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"confidence 임계값이 유효하지 않습니다: "
                 f"0 <= MEDIUM({med}) <= HIGH({high}) <= 1 이어야 합니다."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_rerank_top_n(self) -> "Settings":
+        # 역전 시 stage 2 슬라이스가 후보 수보다 커져 의미 없음.
+        if self.RERANK_TOP_N > self.RETRIEVE_TOP_K_RERANK:
+            raise ValueError(
+                f"RERANK_TOP_N({self.RERANK_TOP_N}) 은 "
+                f"RETRIEVE_TOP_K_RERANK({self.RETRIEVE_TOP_K_RERANK}) 이하여야 합니다."
             )
         return self
 

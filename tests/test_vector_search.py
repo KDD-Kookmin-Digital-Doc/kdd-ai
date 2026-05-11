@@ -30,6 +30,11 @@ def _create_settings(**overrides: str) -> Settings:
 def _create_bedrock(embedding: list[float] | None = None) -> AsyncMock:
     bedrock = AsyncMock()
     bedrock.embed_texts.return_value = [embedding or [0.1] * 1024]
+    # D1: RERANK_ENABLED=True 기본이라 rerank 호출이 발생.
+    # 기존 테스트 동등성 유지 위해 identity 동작(순서/개수 보존, score=1.0)으로 mock.
+    async def _identity_rerank(query, documents, top_n):
+        return [(i, 1.0) for i in range(min(len(documents), top_n))]
+    bedrock.rerank.side_effect = _identity_rerank
     return bedrock
 
 
@@ -395,3 +400,176 @@ class TestEmbeddingReuse:
         # rewrite 분기에서 새 임베딩을 만들었지만 컨텍스트는 그대로
         assert ctx.question_embedding is original_embedding
         assert ctx.embedded_question_text == "원본"
+
+
+# ── D1: Rerank (Task 13) ──
+
+
+def _make_results(n: int) -> list[SearchResult]:
+    """Rerank 테스트용 다중 SearchResult — chunk/doc id 분리."""
+    return [
+        SearchResult(
+            chunk_id=100 + i,
+            doc_id=10 + i,
+            content=f"문서{i}",
+            metadata={"doc_name": f"doc{i}.pdf", "page": i + 1},
+            similarity_score=0.9 - 0.01 * i,
+        )
+        for i in range(n)
+    ]
+
+
+class TestRerank:
+    """D1 (Task 13): two-stage retrieval (임베딩 stage 1 → 도쿄 rerank stage 2)."""
+
+    async def test_disabled_uses_vector_search_top_k(self):
+        """RERANK_ENABLED=False → 검색 top_k=VECTOR_SEARCH_TOP_K (회귀 잠금)."""
+        settings = _create_settings(
+            RERANK_ENABLED="False", VECTOR_SEARCH_TOP_K="5"
+        )
+        bedrock = _create_bedrock()
+        supabase = _create_supabase(search_results=_make_results(5))
+
+        await search_documents(_make_context(), bedrock, supabase, settings)
+
+        call_kwargs = supabase.search_documents.call_args.kwargs
+        assert call_kwargs["top_k"] == 5
+
+    async def test_disabled_does_not_call_rerank(self):
+        """RERANK_ENABLED=False → bedrock.rerank 미호출."""
+        settings = _create_settings(RERANK_ENABLED="False")
+        bedrock = _create_bedrock()
+        supabase = _create_supabase(search_results=_make_results(3))
+
+        await search_documents(_make_context(), bedrock, supabase, settings)
+
+        bedrock.rerank.assert_not_called()
+
+    async def test_enabled_uses_retrieve_top_k_rerank(self):
+        """RERANK_ENABLED=True → 검색 top_k=RETRIEVE_TOP_K_RERANK."""
+        settings = _create_settings(
+            RERANK_ENABLED="True", RETRIEVE_TOP_K_RERANK="30"
+        )
+        bedrock = _create_bedrock()
+        supabase = _create_supabase(search_results=_make_results(30))
+
+        await search_documents(_make_context(), bedrock, supabase, settings)
+
+        call_kwargs = supabase.search_documents.call_args.kwargs
+        assert call_kwargs["top_k"] == 30
+
+    async def test_enabled_calls_rerank_with_documents(self):
+        """rerank 호출 시 documents=[r.content for r in results], top_n=RERANK_TOP_N."""
+        settings = _create_settings(
+            RERANK_ENABLED="True",
+            RETRIEVE_TOP_K_RERANK="3",
+            RERANK_TOP_N="2",
+        )
+        bedrock = _create_bedrock()
+        supabase = _create_supabase(search_results=_make_results(3))
+
+        await search_documents(
+            _make_context(question="휴학 절차"), bedrock, supabase, settings
+        )
+
+        bedrock.rerank.assert_called_once()
+        call_kwargs = bedrock.rerank.call_args.kwargs
+        assert call_kwargs["query"] == "휴학 절차"
+        assert call_kwargs["documents"] == ["문서0", "문서1", "문서2"]
+        assert call_kwargs["top_n"] == 2
+
+    async def test_reorders_and_slices_results(self):
+        """rerank 결과 순서로 재정렬 + RERANK_TOP_N 슬라이스."""
+        settings = _create_settings(
+            RERANK_ENABLED="True",
+            RETRIEVE_TOP_K_RERANK="4",
+            RERANK_TOP_N="2",
+        )
+        bedrock = _create_bedrock()
+        # rerank 가 index [2, 0] 으로 재정렬 (원본 idx 2 → rank 1, idx 0 → rank 2)
+        bedrock.rerank.side_effect = None
+        bedrock.rerank.return_value = [(2, 0.95), (0, 0.80)]
+        supabase = _create_supabase(search_results=_make_results(4))
+
+        ctx = _make_context()
+        result = await search_documents(ctx, bedrock, supabase, settings)
+
+        # 2건만 남고 순서는 rerank 가 정한 것
+        assert len(result.search_results) == 2
+        assert result.search_results[0].chunk_id == 102  # 원본 idx 2
+        assert result.search_results[1].chunk_id == 100  # 원본 idx 0
+
+    async def test_rerank_score_populated_similarity_preserved(self):
+        """rerank_score 채워지고 similarity_score (코사인) 의미는 보존."""
+        settings = _create_settings(
+            RERANK_ENABLED="True",
+            RETRIEVE_TOP_K_RERANK="3",
+            RERANK_TOP_N="2",
+        )
+        bedrock = _create_bedrock()
+        bedrock.rerank.side_effect = None
+        bedrock.rerank.return_value = [(1, 0.97), (0, 0.45)]
+        supabase = _create_supabase(search_results=_make_results(3))
+
+        result = await search_documents(_make_context(), bedrock, supabase, settings)
+
+        # rerank_score 가 새 필드에 채워짐
+        assert result.search_results[0].rerank_score == 0.97
+        assert result.search_results[1].rerank_score == 0.45
+        # similarity_score (코사인) 의미 보존 — 원본 SearchResult 값 그대로
+        # 원본 idx 1: similarity=0.89, 원본 idx 0: similarity=0.9
+        assert result.search_results[0].similarity_score == 0.89
+        assert result.search_results[1].similarity_score == 0.90
+
+    async def test_failure_falls_back_to_embedding_top_n(self):
+        """rerank 예외 시 임베딩 상위 RERANK_TOP_N 개로 graceful degradation."""
+        settings = _create_settings(
+            RERANK_ENABLED="True",
+            RETRIEVE_TOP_K_RERANK="5",
+            RERANK_TOP_N="3",
+        )
+        bedrock = _create_bedrock()
+        bedrock.rerank.side_effect = RuntimeError("도쿄 throttle 시뮬레이션")
+        supabase = _create_supabase(search_results=_make_results(5))
+
+        ctx = _make_context()
+        result = await search_documents(ctx, bedrock, supabase, settings)
+
+        # 임베딩 결과 상위 3개로 fallback — 검색 자체는 실패시키지 않음
+        assert len(result.search_results) == 3
+        assert result.search_results[0].chunk_id == 100  # 임베딩 순서 유지
+        assert result.search_results[1].chunk_id == 101
+        assert result.search_results[2].chunk_id == 102
+        # rerank_score 는 채워지지 않음 (fallback 경로)
+        assert result.search_results[0].rerank_score is None
+        # source_docs 도 정상 구성
+        assert len(result.source_docs) == 3
+
+    async def test_failure_logs_warning(self, caplog):
+        """rerank 실패 시 logger.warning 발생 (CloudWatch 모니터링용)."""
+        import logging
+
+        settings = _create_settings(RERANK_ENABLED="True")
+        bedrock = _create_bedrock()
+        bedrock.rerank.side_effect = RuntimeError("rerank fail")
+        supabase = _create_supabase(search_results=_make_results(3))
+
+        with caplog.at_level(logging.WARNING, logger="app.pipeline.vector_search"):
+            await search_documents(_make_context(), bedrock, supabase, settings)
+
+        assert any(
+            "Rerank 호출 실패" in rec.message for rec in caplog.records
+        )
+
+    async def test_skipped_when_no_results(self):
+        """results=[] 시 rerank 미호출 (불필요한 도쿄 호출 차단), fallback 분기 진입."""
+        settings = _create_settings(RERANK_ENABLED="True")
+        bedrock = _create_bedrock()
+        supabase = _create_supabase(
+            search_results=[], similar_questions=["유사 질문"]
+        )
+
+        result = await search_documents(_make_context(), bedrock, supabase, settings)
+
+        bedrock.rerank.assert_not_called()
+        assert result.suggested_questions == ["유사 질문"]
