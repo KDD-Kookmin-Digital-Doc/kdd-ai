@@ -198,31 +198,36 @@ class TestMessageHelpers:
             "content": [{"text": "답변"}],
         }
 
-    def test_required_fields_missing(self, monkeypatch):
-        monkeypatch.delenv("SUPABASE_URL", raising=False)
-        monkeypatch.delenv("SUPABASE_KEY", raising=False)
-        with pytest.raises(ValidationError):
-            Settings(_env_file=None)
+    def test_required_fields_missing(self):
+        # clear=True 로 셸 env 완전 격리 — SUPABASE_URL/KEY 가 정말 없을 때만 ValidationError
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(ValidationError):
+                Settings(_env_file=None)
 
-    def test_custom_values(self, monkeypatch):
-        monkeypatch.setenv("SUPABASE_URL", "https://custom.supabase.co")
-        monkeypatch.setenv("SUPABASE_KEY", "custom-key")
-        monkeypatch.setenv("SIMILARITY_THRESHOLD", "0.8")
-        monkeypatch.setenv("EMBEDDING_DIMENSION", "512")
-        s = Settings(_env_file=None)
+    def test_custom_values(self):
+        env = {
+            "SUPABASE_URL": "https://custom.supabase.co",
+            "SUPABASE_KEY": "custom-key",
+            "SIMILARITY_THRESHOLD": "0.8",
+            "EMBEDDING_DIMENSION": "512",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            s = Settings(_env_file=None)
         assert s.SUPABASE_URL == "https://custom.supabase.co"
         assert s.SIMILARITY_THRESHOLD == 0.8
         assert s.EMBEDDING_DIMENSION == 512
 
-    def test_embed_batch_size_must_be_positive(self, monkeypatch):
+    def test_embed_batch_size_must_be_positive(self):
         """EMBED_BATCH_SIZE=0 또는 음수면 Settings 생성이 실패한다 (fail-fast)."""
-        monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
-        monkeypatch.setenv("SUPABASE_KEY", "test-key")
-
+        base_env = {
+            "SUPABASE_URL": "https://test.supabase.co",
+            "SUPABASE_KEY": "test-key",
+        }
         for bad_value in ("0", "-1"):
-            monkeypatch.setenv("EMBED_BATCH_SIZE", bad_value)
-            with pytest.raises(ValidationError):
-                Settings(_env_file=None)
+            env = {**base_env, "EMBED_BATCH_SIZE": bad_value}
+            with patch.dict(os.environ, env, clear=True):
+                with pytest.raises(ValidationError):
+                    Settings(_env_file=None)
 
 
 # ── Schema Tests ──

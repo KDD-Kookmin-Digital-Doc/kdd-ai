@@ -1,6 +1,7 @@
 """Bedrock 클라이언트 단위 테스트. 모킹 기반."""
 
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,11 +12,20 @@ from app.config import Settings
 from app.models.pipeline import TokenUsage
 
 
+def _create_settings(**overrides: str) -> Settings:
+    """PR #62 헬퍼 패턴 — clear=True 로 셸/CI env leak 차단."""
+    env = {
+        "SUPABASE_URL": "https://test.supabase.co",
+        "SUPABASE_KEY": "test-key",
+        **overrides,
+    }
+    with patch.dict(os.environ, env, clear=True):
+        return Settings(_env_file=None)
+
+
 @pytest.fixture
-def settings(monkeypatch):
-    monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
-    monkeypatch.setenv("SUPABASE_KEY", "test-key")
-    return Settings(_env_file=None)
+def settings():
+    return _create_settings()
 
 
 @pytest.fixture
@@ -318,12 +328,11 @@ class TestHealthCheck:
 class TestClientInitialization:
     """임베딩 boto Config의 read/connect 타임아웃이 분리 적용되는지."""
 
-    def test_embedding_read_and_connect_timeout_separated(self, monkeypatch):
-        monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
-        monkeypatch.setenv("SUPABASE_KEY", "test-key")
-        monkeypatch.setenv("BEDROCK_EMBEDDING_TIMEOUT", "30")
-        monkeypatch.setenv("BEDROCK_EMBEDDING_CONNECT_TIMEOUT", "10")
-        settings = Settings(_env_file=None)
+    def test_embedding_read_and_connect_timeout_separated(self):
+        settings = _create_settings(
+            BEDROCK_EMBEDDING_TIMEOUT="30",
+            BEDROCK_EMBEDDING_CONNECT_TIMEOUT="10",
+        )
 
         with patch("app.clients.bedrock.boto3.client") as mock_client:
             BedrockClient(settings)
@@ -336,12 +345,9 @@ class TestClientInitialization:
         assert embedding_config.read_timeout == 30
         assert embedding_config.connect_timeout == 10
 
-    def test_llm_timeout_unchanged_by_embedding_split(self, monkeypatch):
+    def test_llm_timeout_unchanged_by_embedding_split(self):
         """LLM 클라이언트는 read=connect로 통합 유지."""
-        monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
-        monkeypatch.setenv("SUPABASE_KEY", "test-key")
-        monkeypatch.setenv("BEDROCK_LLM_TIMEOUT", "45")
-        settings = Settings(_env_file=None)
+        settings = _create_settings(BEDROCK_LLM_TIMEOUT="45")
 
         with patch("app.clients.bedrock.boto3.client") as mock_client:
             BedrockClient(settings)
@@ -352,13 +358,12 @@ class TestClientInitialization:
         assert llm_config.read_timeout == 45
         assert llm_config.connect_timeout == 45
 
-    def test_rerank_client_uses_tokyo_region(self, monkeypatch):
+    def test_rerank_client_uses_tokyo_region(self):
         """D1: Cohere Rerank 3.5 는 Single-region — 도쿄 클라이언트 분리 검증."""
-        monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
-        monkeypatch.setenv("SUPABASE_KEY", "test-key")
-        monkeypatch.setenv("AWS_REGION", "ap-northeast-2")
-        monkeypatch.setenv("BEDROCK_RERANK_TIMEOUT", "15")
-        settings = Settings(_env_file=None)
+        settings = _create_settings(
+            AWS_REGION="ap-northeast-2",
+            BEDROCK_RERANK_TIMEOUT="15",
+        )
 
         with patch("app.clients.bedrock.boto3.client") as mock_client:
             BedrockClient(settings)
