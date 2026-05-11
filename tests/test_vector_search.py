@@ -591,8 +591,9 @@ class TestRerank:
         result = await search_documents(ctx, bedrock, supabase, settings)
 
         # 임베딩 상위 3건 순서대로 fallback — 챗 요청 자체는 살아있음 (IndexError 차단)
-        # (M3 known: 첫 항목엔 부분 mutation 으로 rerank_score 가 묻을 수 있음 — 별도 이슈)
+        # 2-pass 검증으로 부분 mutation 차단 — stale rerank_score 외부 노출 방지
         assert [r.chunk_id for r in result.search_results] == [100, 101, 102]
+        assert all(r.rerank_score is None for r in result.search_results)
 
     async def test_negative_index_falls_back(self):
         """rerank 응답이 음수 인덱스 포함 → 임베딩 fallback (negative wrap-around 차단)."""

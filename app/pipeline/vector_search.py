@@ -115,8 +115,10 @@ async def _apply_rerank(
         logger.warning("Rerank 호출 실패, 임베딩 결과 fallback: %s", exc)
         return results[: settings.RERANK_TOP_N]
 
-    reordered: list[SearchResult] = []
-    for idx, score in reranked:
+    # 2-pass: 인덱스 검증을 먼저 끝낸 뒤에 mutation 을 적용한다. 1-pass 라면
+    # 뒤쪽 idx 가 범위 밖일 때 앞쪽 항목에 stale rerank_score 가 묻은 채로
+    # fallback 분기에 들어가 외부로 새 나갈 수 있다.
+    for idx, _ in reranked:
         if not (0 <= idx < len(results)):
             logger.warning(
                 "Rerank 인덱스 범위 이탈 (idx=%s, len=%d), 임베딩 fallback",
@@ -124,16 +126,19 @@ async def _apply_rerank(
                 len(results),
             )
             return results[: settings.RERANK_TOP_N]
-        r = results[idx]
-        r.rerank_score = score
-        reordered.append(r)
 
-    if not reordered:
+    if not reranked:
         logger.warning(
             "Rerank 빈 응답 (stage 1 후보 %d건), 임베딩 fallback",
             len(results),
         )
         return results[: settings.RERANK_TOP_N]
+
+    reordered: list[SearchResult] = []
+    for idx, score in reranked:
+        r = results[idx]
+        r.rerank_score = score
+        reordered.append(r)
 
     logger.info(
         "Rerank 성공: %d → %d건 (최고 rerank_score=%.4f)",
