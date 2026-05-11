@@ -30,6 +30,9 @@ class SearchResult:
     content: str
     metadata: dict
     similarity_score: float
+    # D1: Cohere Rerank 3.5 relevance score. RERANK_ENABLED=True 일 때만 채워지며,
+    # similarity_score(코사인) 의미를 보존하기 위해 별도 필드로 분리.
+    rerank_score: float | None = None
 
 
 @dataclass

@@ -73,11 +73,19 @@ class BedrockClient:
             connect_timeout=settings.BEDROCK_EMBEDDING_CONNECT_TIMEOUT,
             retries={"max_attempts": 0},
         )
+        # D1: Cohere Rerank 3.5 는 Single-region only — 도쿄 클라이언트 분리.
+        rerank_config = Config(
+            region_name=settings.RERANK_REGION,
+            read_timeout=settings.BEDROCK_RERANK_TIMEOUT,
+            connect_timeout=settings.BEDROCK_RERANK_TIMEOUT,
+            retries={"max_attempts": 0},
+        )
 
         self._llm_client = boto3.client("bedrock-runtime", config=llm_config)
         self._embedding_client = boto3.client(
             "bedrock-runtime", config=embedding_config
         )
+        self._rerank_client = boto3.client("bedrock-runtime", config=rerank_config)
         self.last_stream_usage: TokenUsage = TokenUsage()
 
     # ── 내부 헬퍼 ──
@@ -252,6 +260,49 @@ class BedrockClient:
             if isinstance(embeddings, dict):
                 return embeddings["float"]
             return embeddings
+        finally:
+            await asyncio.to_thread(stream.close)
+
+    async def rerank(
+        self,
+        query: str,
+        documents: list[str],
+        top_n: int,
+    ) -> list[tuple[int, float]]:
+        """Cohere Rerank 3.5 호출 (도쿄 리전, D1, Task 13).
+
+        Args:
+            query: 검색 질의.
+            documents: 임베딩 단계에서 추출된 후보 문서 텍스트 리스트.
+            top_n: 상위 N개만 반환받기. 일반적으로 RERANK_TOP_N.
+
+        Returns:
+            [(index, relevance_score), ...]  — relevance_score 내림차순.
+            index 는 ``documents`` 의 원본 인덱스라 호출자가 재정렬에 사용.
+        """
+        body = json.dumps(
+            {
+                "query": query,
+                "documents": documents,
+                "top_n": top_n,
+                "api_version": 2,
+            }
+        )
+
+        response = await self._retry_async(
+            self._rerank_client.invoke_model,
+            modelId=self._settings.RERANK_MODEL_ID,
+            body=body,
+            contentType="application/json",
+            accept="application/json",
+        )
+
+        stream = response["body"]
+        try:
+            raw = await asyncio.to_thread(stream.read)
+            response_body = json.loads(raw)
+            results = response_body.get("results", [])
+            return [(r["index"], r["relevance_score"]) for r in results]
         finally:
             await asyncio.to_thread(stream.close)
 
