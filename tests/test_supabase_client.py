@@ -1,6 +1,7 @@
 """Supabase Vector DB 클라이언트 단위 테스트. 모킹 기반."""
 
 import asyncio
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,11 +11,20 @@ from app.config import Settings
 from app.models.pipeline import AnswerCache, CacheMatch, SearchResult
 
 
+def _create_settings(**overrides: str) -> Settings:
+    """PR #62 헬퍼 패턴 — clear=True 로 셸/CI env leak 차단."""
+    env = {
+        "SUPABASE_URL": "https://test.supabase.co",
+        "SUPABASE_KEY": "test-key",
+        **overrides,
+    }
+    with patch.dict(os.environ, env, clear=True):
+        return Settings(_env_file=None)
+
+
 @pytest.fixture
-def settings(monkeypatch):
-    monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
-    monkeypatch.setenv("SUPABASE_KEY", "test-key")
-    return Settings(_env_file=None)
+def settings():
+    return _create_settings()
 
 
 @pytest.fixture
