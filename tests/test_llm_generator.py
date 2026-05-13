@@ -555,3 +555,78 @@ class TestGenerateResponse:
             tokens.append(t)
 
         assert tokens == ["안녕", "하세요"]
+
+
+# ── Citation 마커 ({{N}}) ──
+# delightful-greeting-dove.md plan: 답변 본문 인용 마커 도입
+
+
+class TestCitationMarkers:
+    """답변 본문 인용 마커 `{{N}}` 도입 회귀 잠금."""
+
+    def test_academic_system_prompt_contains_marker_rule(self):
+        """academic 시스템 프롬프트에 마커 규칙이 포함된다.
+
+        규칙 #2 가 "출처 명시" 텍스트에서 "{{N}}" 마커 규칙으로 교체되어
+        있는지 핵심 키워드 단위로 단언 (snapshot 회귀 잠금).
+        """
+        settings = _create_settings()
+        ctx = _make_context(search_results=[_make_search_result()])
+
+        system_prompt, _ = build_academic_messages(ctx, settings)
+
+        # 마커 형식과 핵심 가이드 키워드
+        assert "{{N}}" in system_prompt
+        assert "[문서 N]" in system_prompt
+        assert "{{1}}{{3}}" in system_prompt  # 복수 인용 예시
+        assert "여러 문서가 동시에 근거" in system_prompt
+        # 기존 "출처(문서명, 페이지)" 평문 규칙은 제거되어야 함
+        assert "출처(문서명, 페이지)를 명시" not in system_prompt
+        # 외부 리뷰 M-2: escape 회귀 negative assertion. 미래에 .format() 이
+        # 빠지거나 raw 문자열로 리팩토링되어 {{{{N}}}} 4중괄호가 그대로 LLM 에
+        # 전달되는 경우를 잠근다 (substring check 만으론 "{{N}}" in "{{{{N}}}}"
+        # 가 True 라 회귀를 못 잡음).
+        assert "{{{{N}}}}" not in system_prompt
+        assert "{{{{1}}}}" not in system_prompt
+
+    def test_build_doc_context_index_matches_search_results_order(self):
+        """`_build_doc_context` 출력의 [문서 N] 인덱스가 search_results 순서와 일치한다.
+
+        LLM 이 보는 `[문서 N]` 의 N 이 곧 `{{N}}` 마커 매핑 키이므로,
+        search_results 의 1-based enumerate 순서가 도큐먼트 라벨에 그대로
+        반영되어야 한다.
+        """
+        settings = _create_settings()
+        ctx = _make_context(
+            search_results=[
+                _make_search_result(content="A 본문", doc_name="A.pdf", page=1),
+                _make_search_result(content="B 본문", doc_name="B.pdf", page=2),
+                _make_search_result(content="C 본문", doc_name="C.pdf", page=3),
+            ],
+        )
+
+        system_prompt, _ = build_academic_messages(ctx, settings)
+
+        # 1-based 라벨이 순서대로 등장
+        idx_a = system_prompt.find("[문서 1] A.pdf")
+        idx_b = system_prompt.find("[문서 2] B.pdf")
+        idx_c = system_prompt.find("[문서 3] C.pdf")
+        assert idx_a != -1
+        assert idx_b != -1
+        assert idx_c != -1
+        assert idx_a < idx_b < idx_c
+
+    def test_chitchat_system_prompt_does_not_contain_marker_rule(self):
+        """잡담 경로 시스템 프롬프트에 마커 규칙이 새어들지 않는다 (회귀 잠금).
+
+        미래에 academic/chitchat system prompt 가 통합 리팩토링되어도
+        잡담 응답에 `{{N}}` 마커가 박히지 않도록 보장.
+        """
+        settings = _create_settings()
+        ctx = _make_context(intent="chitchat")
+
+        system_prompt, _ = build_chitchat_messages(ctx, settings)
+
+        assert "{{N}}" not in system_prompt
+        assert "{{1}}" not in system_prompt
+        assert "[문서 N]" not in system_prompt
