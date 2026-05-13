@@ -21,10 +21,10 @@ def _create_bedrock(llm_ok: bool = True, embedding_ok: bool = True) -> AsyncMock
     return bedrock
 
 
-def _create_supabase(db_ok: bool = True) -> AsyncMock:
-    supabase = AsyncMock()
-    supabase.health_check.return_value = db_ok
-    return supabase
+def _create_postgres(db_ok: bool = True) -> AsyncMock:
+    postgres = AsyncMock()
+    postgres.health_check.return_value = db_ok
+    return postgres
 
 
 # ── Property 17: 헬스체크 상태 일관성 ──
@@ -43,9 +43,9 @@ class TestHealthCheckConsistency:
     async def test_status_matches_dependencies(self, db_ok, llm_ok, embedding_ok):
         """모든 의존성 정상이면 healthy/200, 하나라도 비정상이면 unhealthy/503."""
         bedrock = _create_bedrock(llm_ok=llm_ok, embedding_ok=embedding_ok)
-        supabase = _create_supabase(db_ok=db_ok)
+        postgres = _create_postgres(db_ok=db_ok)
 
-        response = await health_check(bedrock, supabase)
+        response = await health_check(bedrock, postgres)
         body = json.loads(response.body)
 
         all_ok = db_ok and llm_ok and embedding_ok
@@ -66,9 +66,9 @@ class TestHealthCheckConsistency:
     async def test_dependency_fields_match_individual_status(self, db_ok, llm_ok, embedding_ok):
         """각 의존성 필드가 개별 상태와 일치한다."""
         bedrock = _create_bedrock(llm_ok=llm_ok, embedding_ok=embedding_ok)
-        supabase = _create_supabase(db_ok=db_ok)
+        postgres = _create_postgres(db_ok=db_ok)
 
-        response = await health_check(bedrock, supabase)
+        response = await health_check(bedrock, postgres)
         body = json.loads(response.body)
 
         deps = body["dependencies"]
@@ -84,9 +84,9 @@ class TestHealthCheckUnit:
     async def test_all_healthy(self):
         """모든 의존성 정상 시 200 + healthy."""
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
-        response = await health_check(bedrock, supabase)
+        response = await health_check(bedrock, postgres)
         body = json.loads(response.body)
 
         assert response.status_code == 200
@@ -98,9 +98,9 @@ class TestHealthCheckUnit:
     async def test_db_unhealthy(self):
         """DB만 비정상이면 503 + unhealthy."""
         bedrock = _create_bedrock()
-        supabase = _create_supabase(db_ok=False)
+        postgres = _create_postgres(db_ok=False)
 
-        response = await health_check(bedrock, supabase)
+        response = await health_check(bedrock, postgres)
         body = json.loads(response.body)
 
         assert response.status_code == 503
@@ -111,9 +111,9 @@ class TestHealthCheckUnit:
     async def test_llm_unhealthy(self):
         """LLM만 비정상이면 503 + unhealthy."""
         bedrock = _create_bedrock(llm_ok=False)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
-        response = await health_check(bedrock, supabase)
+        response = await health_check(bedrock, postgres)
         body = json.loads(response.body)
 
         assert response.status_code == 503
@@ -122,9 +122,9 @@ class TestHealthCheckUnit:
     async def test_embedding_unhealthy(self):
         """임베딩만 비정상이면 503 + unhealthy."""
         bedrock = _create_bedrock(embedding_ok=False)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
-        response = await health_check(bedrock, supabase)
+        response = await health_check(bedrock, postgres)
         body = json.loads(response.body)
 
         assert response.status_code == 503
@@ -133,9 +133,9 @@ class TestHealthCheckUnit:
     async def test_all_unhealthy(self):
         """모든 의존성 비정상이면 503 + 모두 unhealthy."""
         bedrock = _create_bedrock(llm_ok=False, embedding_ok=False)
-        supabase = _create_supabase(db_ok=False)
+        postgres = _create_postgres(db_ok=False)
 
-        response = await health_check(bedrock, supabase)
+        response = await health_check(bedrock, postgres)
         body = json.loads(response.body)
 
         assert response.status_code == 503
@@ -147,9 +147,9 @@ class TestHealthCheckUnit:
     async def test_response_has_required_fields(self):
         """응답에 status, dependencies 필드가 존재한다."""
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
-        response = await health_check(bedrock, supabase)
+        response = await health_check(bedrock, postgres)
         body = json.loads(response.body)
 
         assert "status" in body

@@ -10,9 +10,9 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
-from app.api.dependencies import get_bedrock_client, get_supabase_client
+from app.api.dependencies import get_bedrock_client, get_postgres_client
 from app.clients.bedrock import BedrockClient
-from app.clients.supabase_client import SupabaseVectorClient
+from app.clients.postgres_client import PostgresVectorClient
 from app.config import Settings, get_settings
 from app.logging_context import set_session_id
 from app.models.pipeline import AnswerCache, PipelineContext
@@ -43,7 +43,7 @@ router = APIRouter()
 async def _run_pipeline(
     request: ChatRequest,
     bedrock: BedrockClient,
-    supabase: SupabaseVectorClient,
+    postgres: PostgresVectorClient,
     settings: Settings,
 ) -> PipelineContext:
     """RAG 파이프라인을 순차 실행하고 PipelineContext를 반환한다."""
@@ -61,7 +61,7 @@ async def _run_pipeline(
 
     # 1. 시맨틱 캐시
     context = await check_cache(
-        context, request.is_first_message, bedrock, supabase, settings
+        context, request.is_first_message, bedrock, postgres, settings
     )
     if context.cache_hit:
         return context
@@ -77,7 +77,7 @@ async def _run_pipeline(
     context = await rewrite_query(context, bedrock, settings)
 
     # 5. 벡터 검색
-    context = await search_documents(context, bedrock, supabase, settings)
+    context = await search_documents(context, bedrock, postgres, settings)
 
     return context
 
@@ -85,7 +85,7 @@ async def _run_pipeline(
 async def _streaming_wrapper(
     context: PipelineContext,
     bedrock: BedrockClient,
-    supabase: SupabaseVectorClient,
+    postgres: PostgresVectorClient,
     settings: Settings,
     http_request: Request,
     is_first_message: bool,
@@ -128,7 +128,7 @@ async def _streaming_wrapper(
     # 스트리밍 완료 후 캐시 저장 (정상 완료 + 학사규정 답변 시에만)
     if should_cache and stream_completed and answer_buffer:
         task = asyncio.create_task(
-            _save_answer_cache(context, answer_buffer, bedrock, supabase)
+            _save_answer_cache(context, answer_buffer, bedrock, postgres)
         )
         _pending_cache_writes.add(task)
         task.add_done_callback(_pending_cache_writes.discard)
@@ -138,7 +138,7 @@ async def _save_answer_cache(
     context: PipelineContext,
     answer_parts: list[str],
     bedrock: BedrockClient,
-    supabase: SupabaseVectorClient,
+    postgres: PostgresVectorClient,
 ) -> None:
     """답변 캐시를 비동기로 저장한다. 실패 시 로그만 남긴다.
 
@@ -180,7 +180,7 @@ async def _save_answer_cache(
             source_doc_ids=source_doc_ids,
             sources=sources,
         )
-        await supabase.upsert_answer_cache(cache)
+        await postgres.upsert_answer_cache(cache)
         logger.info("답변 캐시 저장 완료: %r", context.original_question)
     except Exception:
         logger.warning("답변 캐시 저장 실패 — 사용자 응답에 영향 없음", exc_info=True)
@@ -241,17 +241,17 @@ async def chat(
     http_request: Request,
     settings: Settings = Depends(get_settings),
     bedrock: BedrockClient = Depends(get_bedrock_client),
-    supabase: SupabaseVectorClient = Depends(get_supabase_client),
+    postgres: PostgresVectorClient = Depends(get_postgres_client),
 ) -> StreamingResponse:
     """RAG 챗봇 대화 엔드포인트. SSE 스트리밍 응답을 반환한다."""
     # PR-50: contextvars 에 session_id 설정. 같은 task 내 모든 sub-coroutine 과
     # asyncio.create_task 로 분기되는 _save_answer_cache 까지 자동 전파.
     # FastAPI 는 요청마다 새 task 를 만들므로 reset 없이도 다른 요청과 격리됨.
     set_session_id(request.session_id)
-    context = await _run_pipeline(request, bedrock, supabase, settings)
+    context = await _run_pipeline(request, bedrock, postgres, settings)
 
     return StreamingResponse(
-        _streaming_wrapper(context, bedrock, supabase, settings, http_request, request.is_first_message),
+        _streaming_wrapper(context, bedrock, postgres, settings, http_request, request.is_first_message),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

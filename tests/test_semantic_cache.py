@@ -20,8 +20,7 @@ from app.pipeline.semantic_cache import check_cache
 
 def _create_settings(**overrides: str) -> Settings:
     env = {
-        "SUPABASE_URL": "https://test.supabase.co",
-        "SUPABASE_KEY": "test-key",
+        "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
         **overrides,
     }
     # clear=True: CI/로컬 셸에 남아있는 환경변수가 테스트로 새는 것을 차단
@@ -35,7 +34,7 @@ def _create_bedrock() -> AsyncMock:
     return bedrock
 
 
-def _create_supabase() -> AsyncMock:
+def _create_postgres() -> AsyncMock:
     return AsyncMock()
 
 
@@ -53,8 +52,8 @@ def mock_bedrock():
 
 
 @pytest.fixture
-def mock_supabase():
-    return _create_supabase()
+def mock_postgres():
+    return _create_postgres()
 
 
 def _make_context(question: str = "테스트 질문") -> PipelineContext:
@@ -89,14 +88,14 @@ class TestSemanticCacheConditionalSearch:
         """is_first_message=True이면 캐시 탐색이 수행된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
-        supabase.search_answer_cache.return_value = None
+        postgres = _create_postgres()
+        postgres.search_answer_cache.return_value = None
 
         ctx = _make_context(question)
-        await check_cache(ctx, True, bedrock, supabase, settings)
+        await check_cache(ctx, True, bedrock, postgres, settings)
 
         bedrock.embed_texts.assert_called_once()
-        supabase.search_answer_cache.assert_called_once()
+        postgres.search_answer_cache.assert_called_once()
 
     @hyp_settings(max_examples=100)
     @given(question=st.text(min_size=1, max_size=200).filter(lambda x: x.strip()))
@@ -104,13 +103,13 @@ class TestSemanticCacheConditionalSearch:
         """is_first_message=False이면 캐시 탐색이 건너뛰어진다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         ctx = _make_context(question)
-        await check_cache(ctx, False, bedrock, supabase, settings)
+        await check_cache(ctx, False, bedrock, postgres, settings)
 
         bedrock.embed_texts.assert_not_called()
-        supabase.search_answer_cache.assert_not_called()
+        postgres.search_answer_cache.assert_not_called()
 
     @hyp_settings(max_examples=100)
     @given(is_first=st.booleans())
@@ -118,16 +117,16 @@ class TestSemanticCacheConditionalSearch:
         """is_first_message 값에 따라 캐시 탐색 여부가 결정된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
-        supabase.search_answer_cache.return_value = None
+        postgres = _create_postgres()
+        postgres.search_answer_cache.return_value = None
 
         ctx = _make_context("질문")
-        await check_cache(ctx, is_first, bedrock, supabase, settings)
+        await check_cache(ctx, is_first, bedrock, postgres, settings)
 
         if is_first:
-            supabase.search_answer_cache.assert_called_once()
+            postgres.search_answer_cache.assert_called_once()
         else:
-            supabase.search_answer_cache.assert_not_called()
+            postgres.search_answer_cache.assert_not_called()
 
 
 # ── Property 4: 캐시 히트 시 토큰 사용량 제로 ──
@@ -147,13 +146,13 @@ class TestCacheHitTokenZero:
         """캐시 히트 시 토큰 사용량이 모두 0이어야 한다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
-        supabase.search_answer_cache.return_value = _make_cache_match(
+        postgres = _create_postgres()
+        postgres.search_answer_cache.return_value = _make_cache_match(
             similarity=similarity,
         )
 
         ctx = _make_context(question)
-        result = await check_cache(ctx, True, bedrock, supabase, settings)
+        result = await check_cache(ctx, True, bedrock, postgres, settings)
 
         assert result.cache_hit is True
         assert result.token_usage.prompt_tokens == 0
@@ -161,13 +160,13 @@ class TestCacheHitTokenZero:
         assert result.token_usage.total_tokens == 0
 
     async def test_cache_miss_keeps_token_usage_zero(
-        self, mock_settings, mock_bedrock, mock_supabase
+        self, mock_settings, mock_bedrock, mock_postgres
     ):
         """캐시 미스 시에도 시맨틱 캐시 단계에서 토큰이 소비되지 않는다."""
-        mock_supabase.search_answer_cache.return_value = None
+        mock_postgres.search_answer_cache.return_value = None
 
         ctx = _make_context()
-        result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+        result = await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
         assert result.cache_hit is False
         assert result.token_usage.prompt_tokens == 0
@@ -180,16 +179,16 @@ class TestCacheHitTokenZero:
 
 class TestCheckCacheUnit:
     async def test_cache_hit_sets_context(
-        self, mock_settings, mock_bedrock, mock_supabase
+        self, mock_settings, mock_bedrock, mock_postgres
     ):
         """캐시 히트 시 PipelineContext가 올바르게 설정된다."""
-        mock_supabase.search_answer_cache.return_value = _make_cache_match(
+        mock_postgres.search_answer_cache.return_value = _make_cache_match(
             answer="최대 4년입니다.",
             sources=[{"doc_id": 1, "chunk_id": 42, "doc_name": "학사요람.pdf", "page": 45}],
         )
 
         ctx = _make_context("휴학 기간")
-        result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+        result = await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
         assert result.cache_hit is True
         assert result.cached_answer == "최대 4년입니다."
@@ -200,71 +199,71 @@ class TestCheckCacheUnit:
         assert result.cached_sources[0].page == 45
 
     async def test_cache_miss_leaves_context_unchanged(
-        self, mock_settings, mock_bedrock, mock_supabase
+        self, mock_settings, mock_bedrock, mock_postgres
     ):
         """캐시 미스 시 PipelineContext의 캐시 필드가 변경되지 않는다."""
-        mock_supabase.search_answer_cache.return_value = None
+        mock_postgres.search_answer_cache.return_value = None
 
         ctx = _make_context("새로운 질문")
-        result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+        result = await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
         assert result.cache_hit is False
         assert result.cached_answer is None
         assert result.cached_sources == []
 
     async def test_embed_texts_called_with_search_query(
-        self, mock_settings, mock_bedrock, mock_supabase
+        self, mock_settings, mock_bedrock, mock_postgres
     ):
         """임베딩 호출 시 input_type이 search_query인지 확인."""
-        mock_supabase.search_answer_cache.return_value = None
+        mock_postgres.search_answer_cache.return_value = None
 
         ctx = _make_context("질문")
-        await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+        await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
         mock_bedrock.embed_texts.assert_called_once_with(
             ["질문"], input_type="search_query"
         )
 
     async def test_threshold_from_settings(
-        self, mock_settings, mock_bedrock, mock_supabase
+        self, mock_settings, mock_bedrock, mock_postgres
     ):
         """캐시 탐색 시 settings의 CACHE_SIMILARITY_THRESHOLD를 사용한다."""
-        mock_supabase.search_answer_cache.return_value = None
+        mock_postgres.search_answer_cache.return_value = None
 
         ctx = _make_context("질문")
-        await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+        await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
-        call_kwargs = mock_supabase.search_answer_cache.call_args
+        call_kwargs = mock_postgres.search_answer_cache.call_args
         assert call_kwargs.kwargs["threshold"] == mock_settings.CACHE_SIMILARITY_THRESHOLD
 
     async def test_graceful_degradation_on_bedrock_error(
-        self, mock_settings, mock_bedrock, mock_supabase, caplog
+        self, mock_settings, mock_bedrock, mock_postgres, caplog
     ):
         """Bedrock 임베딩 실패 시 graceful degradation."""
         mock_bedrock.embed_texts.side_effect = RuntimeError("Bedrock 연결 실패")
 
         ctx = _make_context("질문")
         with caplog.at_level(logging.WARNING):
-            result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+            result = await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
         assert result.cache_hit is False
         assert "시맨틱 캐시 탐색 실패" in caplog.text
 
-    async def test_graceful_degradation_on_supabase_error(
-        self, mock_settings, mock_bedrock, mock_supabase, caplog
+    async def test_graceful_degradation_on_postgres_error(
+        self, mock_settings, mock_bedrock, mock_postgres, caplog
     ):
-        """Supabase 캐시 탐색 실패 시 graceful degradation."""
-        mock_supabase.search_answer_cache.side_effect = RuntimeError("DB 연결 실패")
+        """Postgres 캐시 탐색 실패 시 graceful degradation."""
+        mock_postgres.search_answer_cache.side_effect = RuntimeError("DB 연결 실패")
 
         ctx = _make_context("질문")
         with caplog.at_level(logging.WARNING):
-            result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+            result = await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
         assert result.cache_hit is False
         assert "시맨틱 캐시 탐색 실패" in caplog.text
 
     async def test_multiple_sources_in_cache_hit(
-        self, mock_settings, mock_bedrock, mock_supabase
+        self, mock_settings, mock_bedrock, mock_postgres
     ):
         """캐시 히트 시 여러 출처가 올바르게 매핑된다."""
         sources = [
@@ -272,12 +271,12 @@ class TestCheckCacheUnit:
             {"doc_id": 1, "chunk_id": 2, "doc_name": "학사요람.pdf", "page": 46},
             {"doc_id": 2, "chunk_id": 3, "doc_name": "학칙.pdf", "page": 10},
         ]
-        mock_supabase.search_answer_cache.return_value = _make_cache_match(
+        mock_postgres.search_answer_cache.return_value = _make_cache_match(
             sources=sources,
         )
 
         ctx = _make_context("질문")
-        result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+        result = await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
         assert len(result.cached_sources) == 3
         assert result.cached_sources[2].doc_id == 2
@@ -292,83 +291,83 @@ class TestEmbeddingCaching:
     """check_cache가 임베딩 직후 PipelineContext에 결과를 보관해 하위 단계가 재사용하도록."""
 
     async def test_caches_embedding_on_miss(
-        self, mock_settings, mock_bedrock, mock_supabase
+        self, mock_settings, mock_bedrock, mock_postgres
     ):
         """캐시 미스 시 question_embedding과 embedded_question_text가 컨텍스트에 저장된다."""
         cached_embedding = [0.42] * 1024
         mock_bedrock.embed_texts.return_value = [cached_embedding]
-        mock_supabase.search_answer_cache.return_value = None
+        mock_postgres.search_answer_cache.return_value = None
 
         ctx = _make_context("질문")
-        result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+        result = await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
         assert result.question_embedding == cached_embedding
         assert result.embedded_question_text == "질문"
 
     async def test_caches_embedding_on_hit(
-        self, mock_settings, mock_bedrock, mock_supabase
+        self, mock_settings, mock_bedrock, mock_postgres
     ):
         """캐시 히트 시에도 동일하게 보관 (일관성)."""
         cached_embedding = [0.42] * 1024
         mock_bedrock.embed_texts.return_value = [cached_embedding]
-        mock_supabase.search_answer_cache.return_value = _make_cache_match()
+        mock_postgres.search_answer_cache.return_value = _make_cache_match()
 
         ctx = _make_context("질문")
-        result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+        result = await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
         assert result.cache_hit is True
         assert result.question_embedding == cached_embedding
         assert result.embedded_question_text == "질문"
 
     async def test_does_not_cache_when_skipped(
-        self, mock_settings, mock_bedrock, mock_supabase
+        self, mock_settings, mock_bedrock, mock_postgres
     ):
         """is_first_message=False (멀티턴) 일 때는 임베딩 자체를 안 하므로 None 유지."""
         ctx = _make_context("멀티턴 질문")
-        result = await check_cache(ctx, False, mock_bedrock, mock_supabase, mock_settings)
+        result = await check_cache(ctx, False, mock_bedrock, mock_postgres, mock_settings)
 
         mock_bedrock.embed_texts.assert_not_called()
         assert result.question_embedding is None
         assert result.embedded_question_text is None
 
     async def test_does_not_cache_on_embed_error(
-        self, mock_settings, mock_bedrock, mock_supabase
+        self, mock_settings, mock_bedrock, mock_postgres
     ):
         """embed_texts 실패 시 컨텍스트가 None 유지 (graceful degradation 후 새로 시도 가능)."""
         mock_bedrock.embed_texts.side_effect = RuntimeError("Bedrock 실패")
 
         ctx = _make_context("질문")
-        result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+        result = await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
         assert result.question_embedding is None
         assert result.embedded_question_text is None
         assert result.embedded_question_input_type is None
 
     async def test_caches_input_type_with_embedding(
-        self, mock_settings, mock_bedrock, mock_supabase
+        self, mock_settings, mock_bedrock, mock_postgres
     ):
         """input_type 도 함께 보관 (silent quality degradation 가드)."""
-        mock_supabase.search_answer_cache.return_value = None
+        mock_postgres.search_answer_cache.return_value = None
 
         ctx = _make_context("질문")
-        result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+        result = await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
         assert result.embedded_question_input_type == "search_query"
 
-    async def test_preserves_embedding_on_supabase_error(
-        self, mock_settings, mock_bedrock, mock_supabase
+    async def test_preserves_embedding_on_postgres_error(
+        self, mock_settings, mock_bedrock, mock_postgres
     ):
-        """Supabase 실패 시에도 question_embedding 은 보존 (embed 후에 실패했으므로).
+        """Postgres 실패 시에도 question_embedding 은 보존 (embed 후에 실패했으므로).
 
         하위 단계(vector_search) 가 cache 가 못 한 일을 마저 할 수 있도록 컨텍스트는
         살려둔다. 누군가 except 블록에서 reset 해버리면 silent regression 이라 lock down.
         """
         cached_embedding = [0.42] * 1024
         mock_bedrock.embed_texts.return_value = [cached_embedding]
-        mock_supabase.search_answer_cache.side_effect = RuntimeError("DB 실패")
+        mock_postgres.search_answer_cache.side_effect = RuntimeError("DB 실패")
 
         ctx = _make_context("질문")
-        result = await check_cache(ctx, True, mock_bedrock, mock_supabase, mock_settings)
+        result = await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
         assert result.cache_hit is False
         # 임베딩은 이미 만들어졌으니 보존되어야 함

@@ -15,8 +15,7 @@ from app.models.pipeline import TokenUsage
 def _create_settings(**overrides: str) -> Settings:
     """PR #62 헬퍼 패턴 — clear=True 로 셸/CI env leak 차단."""
     env = {
-        "SUPABASE_URL": "https://test.supabase.co",
-        "SUPABASE_KEY": "test-key",
+        "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
         **overrides,
     }
     with patch.dict(os.environ, env, clear=True):

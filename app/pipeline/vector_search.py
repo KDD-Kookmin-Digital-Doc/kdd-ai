@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from app.clients.bedrock import BedrockClient
-from app.clients.supabase_client import SupabaseVectorClient
+from app.clients.postgres_client import PostgresVectorClient
 from app.config import Settings
 from app.models.pipeline import PipelineContext, SearchResult, SourceDoc
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 async def search_documents(
     context: PipelineContext,
     bedrock: BedrockClient,
-    supabase: SupabaseVectorClient,
+    postgres: PostgresVectorClient,
     settings: Settings,
 ) -> PipelineContext:
     """질문을 임베딩하여 벡터 검색을 수행하고 PipelineContext를 갱신한다.
@@ -54,7 +54,7 @@ async def search_documents(
         if settings.RERANK_ENABLED
         else settings.VECTOR_SEARCH_TOP_K
     )
-    results = await supabase.search_documents(
+    results = await postgres.search_documents(
         embedding=question_embedding,
         top_k=retrieve_top_k,
         threshold=settings.SIMILARITY_THRESHOLD,
@@ -77,7 +77,7 @@ async def search_documents(
             results[0].similarity_score,
         )
     else:
-        suggested = await supabase.search_similar_questions(
+        suggested = await postgres.search_similar_questions(
             embedding=question_embedding,
             top_k=settings.FALLBACK_SUGGESTED_COUNT,
             threshold=settings.FALLBACK_SIMILARITY_THRESHOLD,

@@ -34,8 +34,7 @@ class TestSettings:
     def test_defaults(self):
         # clear=True: CI/로컬 셸의 환경변수 leak 차단 — 기본값 검증 정확성 보장
         with patch.dict(os.environ, {
-            "SUPABASE_URL": "https://test.supabase.co",
-            "SUPABASE_KEY": "test-key",
+            "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
         }, clear=True):
             s = Settings(_env_file=None)
             assert s.BEDROCK_LIGHT_MODEL_ID == "apac.anthropic.claude-3-haiku-20240307-v1:0"
@@ -53,7 +52,7 @@ class TestSettings:
             assert s.EMBED_BATCH_SIZE == 48
             assert s.INTENT_HISTORY_TURNS == 6
             assert s.INTENT_HISTORY_CHARS_PER_TURN == 200
-            assert s.SUPABASE_TIMEOUT == 10
+            assert s.POSTGRES_TIMEOUT == 10
             assert s.CACHE_TTL_DAYS == 90
             assert s.LOG_LEVEL == "INFO"
             # PR-R5 매직넘버 settings화 + 이슈 #46 fallback threshold
@@ -76,8 +75,7 @@ class TestSettings:
     def test_log_level_normalized_to_upper(self):
         """LOG_LEVEL 은 대소문자 무관하게 받아들여 대문자로 정규화된다."""
         with patch.dict(os.environ, {
-            "SUPABASE_URL": "https://test.supabase.co",
-            "SUPABASE_KEY": "test-key",
+            "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
             "LOG_LEVEL": "debug",
         }, clear=True):
             s = Settings(_env_file=None)
@@ -86,8 +84,7 @@ class TestSettings:
     def test_log_level_invalid_rejected(self):
         """알 수 없는 LOG_LEVEL 은 ValidationError."""
         with patch.dict(os.environ, {
-            "SUPABASE_URL": "https://test.supabase.co",
-            "SUPABASE_KEY": "test-key",
+            "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
             "LOG_LEVEL": "VERBOSE",
         }, clear=True):
             with pytest.raises(ValidationError):
@@ -96,8 +93,7 @@ class TestSettings:
     def test_rerank_top_n_must_not_exceed_retrieve_top_k(self):
         """RERANK_TOP_N > RETRIEVE_TOP_K_RERANK 이면 ValidationError (역전 가드)."""
         with patch.dict(os.environ, {
-            "SUPABASE_URL": "https://test.supabase.co",
-            "SUPABASE_KEY": "test-key",
+            "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
             "RERANK_TOP_N": "31",
             "RETRIEVE_TOP_K_RERANK": "30",
         }, clear=True):
@@ -107,8 +103,7 @@ class TestSettings:
     def test_rerank_top_n_equal_retrieve_top_k_ok(self):
         """경계값 (TOP_N == RETRIEVE_TOP_K) 은 허용."""
         with patch.dict(os.environ, {
-            "SUPABASE_URL": "https://test.supabase.co",
-            "SUPABASE_KEY": "test-key",
+            "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
             "RERANK_TOP_N": "30",
             "RETRIEVE_TOP_K_RERANK": "30",
         }, clear=True):
@@ -199,29 +194,27 @@ class TestMessageHelpers:
         }
 
     def test_required_fields_missing(self):
-        # clear=True 로 셸 env 완전 격리 — SUPABASE_URL/KEY 가 정말 없을 때만 ValidationError
+        # clear=True 로 셸 env 완전 격리 — DATABASE_URL 가 정말 없을 때만 ValidationError
         with patch.dict(os.environ, {}, clear=True):
             with pytest.raises(ValidationError):
                 Settings(_env_file=None)
 
     def test_custom_values(self):
         env = {
-            "SUPABASE_URL": "https://custom.supabase.co",
-            "SUPABASE_KEY": "custom-key",
+            "DATABASE_URL": "postgresql://custom:custom-key@localhost:5432/custom_db",
             "SIMILARITY_THRESHOLD": "0.8",
             "EMBEDDING_DIMENSION": "512",
         }
         with patch.dict(os.environ, env, clear=True):
             s = Settings(_env_file=None)
-        assert s.SUPABASE_URL == "https://custom.supabase.co"
+        assert s.DATABASE_URL == "postgresql://custom:custom-key@localhost:5432/custom_db"
         assert s.SIMILARITY_THRESHOLD == 0.8
         assert s.EMBEDDING_DIMENSION == 512
 
     def test_embed_batch_size_must_be_positive(self):
         """EMBED_BATCH_SIZE=0 또는 음수면 Settings 생성이 실패한다 (fail-fast)."""
         base_env = {
-            "SUPABASE_URL": "https://test.supabase.co",
-            "SUPABASE_KEY": "test-key",
+            "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
         }
         for bad_value in ("0", "-1"):
             env = {**base_env, "EMBED_BATCH_SIZE": bad_value}

@@ -16,8 +16,7 @@ from app.startup import validate_startup
 
 def _create_settings(embedding_dimension: int = 1024) -> Settings:
     with patch.dict(os.environ, {
-        "SUPABASE_URL": "https://test.supabase.co",
-        "SUPABASE_KEY": "test-key",
+        "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
         "EMBEDDING_DIMENSION": str(embedding_dimension),
     }, clear=True):
         return Settings(_env_file=None)
@@ -35,10 +34,10 @@ def _create_bedrock(
     return bedrock
 
 
-def _create_supabase(db_ok: bool = True) -> AsyncMock:
-    supabase = AsyncMock()
-    supabase.health_check.return_value = db_ok
-    return supabase
+def _create_postgres(db_ok: bool = True) -> AsyncMock:
+    postgres = AsyncMock()
+    postgres.health_check.return_value = db_ok
+    return postgres
 
 
 # ── Property 14: 서버 시작 차원 검증 ──
@@ -53,9 +52,9 @@ class TestEmbeddingDimensionValidation:
         """임베딩 차원 일치 → 정상 시작 (예외 없음)."""
         settings = _create_settings(embedding_dimension=1024)
         bedrock = _create_bedrock(embed_dimension=1024)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
-        await validate_startup(settings, bedrock, supabase)
+        await validate_startup(settings, bedrock, postgres)
 
         bedrock.embed_texts.assert_called_once()
 
@@ -64,19 +63,19 @@ class TestEmbeddingDimensionValidation:
         """임베딩 차원 불일치 → RuntimeError."""
         settings = _create_settings(embedding_dimension=1024)
         bedrock = _create_bedrock(embed_dimension=512)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         with pytest.raises(RuntimeError, match="임베딩 차원 불일치"):
-            await validate_startup(settings, bedrock, supabase)
+            await validate_startup(settings, bedrock, postgres)
 
     @pytest.mark.asyncio
     async def test_dimension_check_uses_settings_value(self):
         """환경변수 EMBEDDING_DIMENSION 값을 기준으로 검증한다."""
         settings = _create_settings(embedding_dimension=768)
         bedrock = _create_bedrock(embed_dimension=768)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
-        await validate_startup(settings, bedrock, supabase)
+        await validate_startup(settings, bedrock, postgres)
 
     @pytest.mark.asyncio
     async def test_embed_failure_during_dimension_check_raises(self):
@@ -84,10 +83,10 @@ class TestEmbeddingDimensionValidation:
         settings = _create_settings()
         bedrock = _create_bedrock()
         bedrock.embed_texts.side_effect = Exception("Bedrock timeout")
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         with pytest.raises(RuntimeError, match="Bedrock 호출 실패"):
-            await validate_startup(settings, bedrock, supabase)
+            await validate_startup(settings, bedrock, postgres)
 
 
 # ── 외부 의존성 연결 검증 ──
@@ -97,45 +96,45 @@ class TestDependencyValidation:
     """외부 서비스 연결 실패 시 서버 시작 중단 검증."""
 
     @pytest.mark.asyncio
-    async def test_supabase_failure_raises(self):
-        """Supabase 연결 실패 → RuntimeError."""
+    async def test_postgres_failure_raises(self):
+        """Postgres 연결 실패 → RuntimeError."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase(db_ok=False)
+        postgres = _create_postgres(db_ok=False)
 
-        with pytest.raises(RuntimeError, match="Supabase"):
-            await validate_startup(settings, bedrock, supabase)
+        with pytest.raises(RuntimeError, match="Postgres"):
+            await validate_startup(settings, bedrock, postgres)
 
     @pytest.mark.asyncio
     async def test_bedrock_llm_failure_raises(self):
         """Bedrock LLM 연결 실패 → RuntimeError."""
         settings = _create_settings()
         bedrock = _create_bedrock(llm_ok=False)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         with pytest.raises(RuntimeError, match="Bedrock LLM"):
-            await validate_startup(settings, bedrock, supabase)
+            await validate_startup(settings, bedrock, postgres)
 
     @pytest.mark.asyncio
     async def test_bedrock_embedding_failure_raises(self):
         """Bedrock Embedding 연결 실패 → RuntimeError."""
         settings = _create_settings()
         bedrock = _create_bedrock(embedding_ok=False)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         with pytest.raises(RuntimeError, match="Bedrock Embedding"):
-            await validate_startup(settings, bedrock, supabase)
+            await validate_startup(settings, bedrock, postgres)
 
     @pytest.mark.asyncio
     async def test_all_healthy_passes(self):
         """모든 의존성 정상 → 예외 없이 완료."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
-        await validate_startup(settings, bedrock, supabase)
+        await validate_startup(settings, bedrock, postgres)
 
-        supabase.health_check.assert_called_once()
+        postgres.health_check.assert_called_once()
         bedrock.health_check_llm.assert_called_once()
         bedrock.health_check_embedding.assert_called_once()
         bedrock.embed_texts.assert_called_once()
@@ -148,14 +147,14 @@ class TestValidationOrder:
     """의존성 검증은 순차적으로 수행되며, 앞선 검증 실패 시 이후 검증을 건너뛴다."""
 
     @pytest.mark.asyncio
-    async def test_supabase_failure_skips_bedrock_checks(self):
-        """Supabase 실패 시 Bedrock 헬스체크는 호출되지 않는다."""
+    async def test_postgres_failure_skips_bedrock_checks(self):
+        """Postgres 실패 시 Bedrock 헬스체크는 호출되지 않는다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase(db_ok=False)
+        postgres = _create_postgres(db_ok=False)
 
         with pytest.raises(RuntimeError):
-            await validate_startup(settings, bedrock, supabase)
+            await validate_startup(settings, bedrock, postgres)
 
         bedrock.health_check_llm.assert_not_called()
         bedrock.health_check_embedding.assert_not_called()
@@ -166,10 +165,10 @@ class TestValidationOrder:
         """Bedrock LLM 실패 시 임베딩 헬스체크와 차원 검증은 호출되지 않는다."""
         settings = _create_settings()
         bedrock = _create_bedrock(llm_ok=False)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         with pytest.raises(RuntimeError):
-            await validate_startup(settings, bedrock, supabase)
+            await validate_startup(settings, bedrock, postgres)
 
         bedrock.health_check_embedding.assert_not_called()
         bedrock.embed_texts.assert_not_called()

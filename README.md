@@ -10,7 +10,7 @@
 | LLM (답변 생성) | AWS Bedrock — Claude 3.5 Sonnet |
 | LLM (재작성/의도분류/잡담) | AWS Bedrock — Claude 3 Haiku |
 | 임베딩 | AWS Bedrock — Cohere Embed Multilingual v4 (1024차원) |
-| 벡터 DB | Supabase (PostgreSQL + pgvector) |
+| 벡터 DB | AWS RDS PostgreSQL + pgvector |
 | 스트리밍 | SSE (Server-Sent Events) |
 | 테스트 | pytest, pytest-asyncio, Hypothesis (속성 기반 테스트) |
 
@@ -36,7 +36,7 @@
       │          │              │
       ▼          ▼              ▼
 ┌───────────┐ ┌──────────────┐ ┌──────────────────────┐
-│ Bedrock   │ │ Bedrock      │ │ Supabase Vector DB   │
+│ Bedrock   │ │ Bedrock      │ │ RDS PostgreSQL       │
 │ Claude    │ │ Cohere Embed │ │ (pgvector)           │
 │ Haiku/    │ │ v4 (1024d)   │ │                      │
 │ Sonnet    │ │              │ │                      │
@@ -113,7 +113,7 @@ is_first_message?
 |---|---|---|
 | 400 | BAD_REQUEST | 필수 파라미터 누락, 비즈니스 검증 실패 |
 | 422 | VALIDATION_ERROR | 타입 불일치, 제약조건 위반 |
-| 503 | SERVICE_UNAVAILABLE | Bedrock / Supabase 장애 |
+| 503 | SERVICE_UNAVAILABLE | Bedrock / RDS PostgreSQL 장애 |
 | 500 | INTERNAL_ERROR | 예상치 못한 내부 오류 |
 
 ## 프로젝트 구조
@@ -145,7 +145,7 @@ app/
 │
 ├── clients/                 # 외부 서비스 클라이언트
 │   ├── bedrock.py           # AWS Bedrock (LLM + 임베딩)
-│   └── supabase_client.py   # Supabase Vector DB
+│   └── postgres_client.py   # RDS PostgreSQL Vector DB (asyncpg + pgvector)
 │
 ├── models/
 │   ├── schemas.py           # 요청/응답 Pydantic 모델
@@ -156,7 +156,7 @@ app/
 
 tests/
 ├── test_bedrock.py          # Bedrock 클라이언트 단위 테스트
-├── test_supabase_client.py  # Supabase 클라이언트 단위 테스트
+├── test_postgres_client.py  # PostgreSQL (asyncpg) 클라이언트 단위 테스트
 ├── test_semantic_cache.py   # 시맨틱 캐시 속성 테스트
 ├── test_query_rewriter.py   # 질문 재작성 속성 테스트
 ├── test_intent_router.py    # 의도 분류 속성 테스트
@@ -182,8 +182,9 @@ cp .env.example .env
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `SUPABASE_URL` | (필수) | Supabase 프로젝트 URL |
-| `SUPABASE_KEY` | (필수) | Supabase service role key |
+| `DATABASE_URL` | (필수) | RDS PostgreSQL DSN (예: `postgresql://user:pass@host:5432/db?sslmode=require`) |
+| `POSTGRES_POOL_MIN_SIZE` | `2` | asyncpg connection pool 최소 크기 |
+| `POSTGRES_POOL_MAX_SIZE` | `10` | asyncpg connection pool 최대 크기 |
 | `AWS_REGION` | `ap-northeast-2` | AWS 리전 |
 | `BEDROCK_LIGHT_MODEL_ID` | `apac.anthropic.claude-3-haiku-20240307-v1:0` | 질문 재작성, 의도 분류, 잡담용 LLM |
 | `BEDROCK_ANSWER_MODEL_ID` | `apac.anthropic.claude-3-5-sonnet-20241022-v2:0` | 학사규정 답변 생성용 LLM |
@@ -198,7 +199,7 @@ cp .env.example .env
 | `CACHE_TTL_DAYS` | `90` | 캐시 만료 기간 (일) |
 | `BEDROCK_LLM_TIMEOUT` | `30` | LLM 호출 타임아웃 (초) |
 | `BEDROCK_EMBEDDING_TIMEOUT` | `15` | 임베딩 호출 타임아웃 (초) |
-| `SUPABASE_TIMEOUT` | `10` | Supabase 호출 타임아웃 (초) |
+| `POSTGRES_TIMEOUT` | `10` | asyncpg 쿼리 단위 타임아웃 (초) |
 | `CORS_ORIGINS` | `[]` (비활성) | CORS 허용 오리진 (예: `["http://localhost:3000"]`) |
 
 ## 로컬 실행
@@ -213,20 +214,20 @@ pip install -e ".[dev]"
 
 # 3. 환경 변수 설정
 cp .env.example .env
-# .env 파일에 실제 SUPABASE_URL, SUPABASE_KEY 등 입력
+# .env 파일에 실제 DATABASE_URL 등 입력
 
 # 4. 서버 실행
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-서버 시작 시 자동으로 외부 의존성(Supabase, Bedrock) 연결과 임베딩 차원 정합성을 검증합니다. 검증 실패 시 서버가 시작되지 않습니다.
+서버 시작 시 자동으로 외부 의존성(RDS PostgreSQL, Bedrock) 연결과 임베딩 차원 정합성을 검증합니다. 검증 실패 시 서버가 시작되지 않습니다.
 
 ## Docker 실행
 
 ```bash
 # 환경 파일 준비
 cp .env.example .env
-# .env에 SUPABASE_URL, SUPABASE_KEY 등 필수값 설정
+# .env에 DATABASE_URL 등 필수값 설정
 
 # 이미지 빌드
 docker build -t kdd-ai .
@@ -255,7 +256,7 @@ pytest tests/test_chat.py -v
 pytest tests/ -v --cov=app
 ```
 
-모든 테스트는 외부 의존성(AWS Bedrock, Supabase)을 모킹하여 실행되므로 네트워크 연결 없이 동작합니다.
+모든 테스트는 외부 의존성(AWS Bedrock, RDS PostgreSQL)을 모킹하여 실행되므로 네트워크 연결 없이 동작합니다.
 
 ## 설계 원칙
 

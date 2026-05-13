@@ -6,9 +6,9 @@ import logging
 
 from fastapi import APIRouter, Depends, Path
 
-from app.api.dependencies import get_bedrock_client, get_supabase_client
+from app.api.dependencies import get_bedrock_client, get_postgres_client
 from app.clients.bedrock import BedrockClient
-from app.clients.supabase_client import SupabaseVectorClient
+from app.clients.postgres_client import PostgresVectorClient
 from app.config import Settings, get_settings
 from app.models.schemas import EmbedRequest, ErrorResponse
 
@@ -24,7 +24,7 @@ router = APIRouter()
     operation_id="embed_document",
     description=(
         "문서 청크 목록을 받아 임베딩을 생성하고 벡터 DB에 적재합니다.\n\n"
-        "- 동일 `doc_id` 재적재 시 **단일 트랜잭션**(Supabase RPC)으로 "
+        "- 동일 `doc_id` 재적재 시 **단일 트랜잭션**(Postgres RPC)으로 "
         "기존 청크 삭제 + 관련 캐시 무효화 + 새 청크 삽입 (last-write-wins, atomic)\n"
         "- 일부 청크 임베딩 실패 시 `status=partial_failure` 로 응답합니다. "
         "이때도 RPC는 호출되며, 동일 `doc_id`의 기존 청크 전체가 새 성공분으로 "
@@ -70,7 +70,7 @@ async def embed_document(
     request: EmbedRequest,
     settings: Settings = Depends(get_settings),
     bedrock: BedrockClient = Depends(get_bedrock_client),
-    supabase: SupabaseVectorClient = Depends(get_supabase_client),
+    postgres: PostgresVectorClient = Depends(get_postgres_client),
 ) -> dict:
     """문서 청크를 벡터화하여 DB에 적재한다.
 
@@ -122,7 +122,7 @@ async def embed_document(
     #    (RPC 단일 트랜잭션 — INSERT 실패 시 DELETE 자동 롤백, 이슈 #43)
     inserted_count = 0
     if embedded_chunks:
-        inserted_count = await supabase.replace_document_chunks(
+        inserted_count = await postgres.replace_document_chunks(
             request.doc_id, embedded_chunks
         )
 
@@ -185,14 +185,14 @@ async def embed_document(
 )
 async def delete_document(
     doc_id: int = Path(..., ge=1),
-    supabase: SupabaseVectorClient = Depends(get_supabase_client),
+    postgres: PostgresVectorClient = Depends(get_postgres_client),
 ) -> dict:
     """문서 벡터 데이터를 삭제하고 관련 캐시를 무효화한다.
 
     존재하지 않는 doc_id에 대해서도 카운트 0으로 성공 응답을 반환한다 (멱등성).
     """
-    deleted_chunk_count = await supabase.delete_document_chunks(doc_id)
-    invalidated_cache_count = await supabase.invalidate_cache_by_doc_id(doc_id)
+    deleted_chunk_count = await postgres.delete_document_chunks(doc_id)
+    invalidated_cache_count = await postgres.invalidate_cache_by_doc_id(doc_id)
 
     logger.info(
         "문서 삭제 완료: doc_id=%s, deleted_chunks=%d, invalidated_caches=%d",

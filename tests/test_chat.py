@@ -29,8 +29,7 @@ from app.api.chat import _run_pipeline, _save_answer_cache, _streaming_wrapper
 
 def _create_settings() -> Settings:
     with patch.dict(os.environ, {
-        "SUPABASE_URL": "https://test.supabase.co",
-        "SUPABASE_KEY": "test-key",
+        "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
     }, clear=True):
         return Settings(_env_file=None)
 
@@ -46,13 +45,13 @@ def _create_bedrock() -> AsyncMock:
     return bedrock
 
 
-def _create_supabase() -> AsyncMock:
-    supabase = AsyncMock()
-    supabase.search_answer_cache.return_value = None
-    supabase.search_documents.return_value = []
-    supabase.search_similar_questions.return_value = []
-    supabase.upsert_answer_cache.return_value = None
-    return supabase
+def _create_postgres() -> AsyncMock:
+    postgres = AsyncMock()
+    postgres.search_answer_cache.return_value = None
+    postgres.search_documents.return_value = []
+    postgres.search_similar_questions.return_value = []
+    postgres.upsert_answer_cache.return_value = None
+    return postgres
 
 
 def _make_chat_request(
@@ -107,8 +106,8 @@ class TestRunPipeline:
         """캐시 히트 시 재작성/의도분류/벡터검색을 건너뛴다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
-        supabase.search_answer_cache.return_value = _make_cache_match()
+        postgres = _create_postgres()
+        postgres.search_answer_cache.return_value = _make_cache_match()
 
         request = _make_chat_request(is_first_message=True)
 
@@ -116,7 +115,7 @@ class TestRunPipeline:
              patch("app.api.chat.classify_intent") as mock_intent, \
              patch("app.api.chat.search_documents") as mock_search:
 
-            context = await _run_pipeline(request, bedrock, supabase, settings)
+            context = await _run_pipeline(request, bedrock, postgres, settings)
 
             assert context.cache_hit is True
             mock_rewrite.assert_not_called()
@@ -132,7 +131,7 @@ class TestRunPipeline:
         """
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         async def _mock_classify(ctx, br, st):
             ctx.intent = "chitchat"
@@ -144,7 +143,7 @@ class TestRunPipeline:
              patch("app.api.chat.classify_intent", side_effect=_mock_classify), \
              patch("app.api.chat.search_documents") as mock_search:
 
-            context = await _run_pipeline(request, bedrock, supabase, settings)
+            context = await _run_pipeline(request, bedrock, postgres, settings)
 
             assert context.intent == "chitchat"
             mock_rewrite.assert_not_called()
@@ -158,7 +157,7 @@ class TestRunPipeline:
         """
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         call_order: list[str] = []
 
@@ -183,7 +182,7 @@ class TestRunPipeline:
              patch("app.api.chat.rewrite_query", side_effect=_mock_rewrite), \
              patch("app.api.chat.search_documents", side_effect=_mock_search):
 
-            await _run_pipeline(request, bedrock, supabase, settings)
+            await _run_pipeline(request, bedrock, postgres, settings)
 
         assert call_order == ["classify", "rewrite", "search"]
 
@@ -191,7 +190,7 @@ class TestRunPipeline:
         """학사규정 경로: 캐시미스 → 재작성 → 의도분류 → 벡터검색 전체 실행."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         async def _mock_rewrite(ctx, br, st):
             ctx.rewritten_question = ctx.original_question
@@ -211,7 +210,7 @@ class TestRunPipeline:
              patch("app.api.chat.classify_intent", side_effect=_mock_classify), \
              patch("app.api.chat.search_documents", side_effect=_mock_search):
 
-            context = await _run_pipeline(request, bedrock, supabase, settings)
+            context = await _run_pipeline(request, bedrock, postgres, settings)
 
             assert context.intent == "academic"
             assert len(context.search_results) == 1
@@ -220,13 +219,13 @@ class TestRunPipeline:
         """PR-50: ChatRequest.session_id 가 PipelineContext.session_id 에 복사된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         request = _make_chat_request(is_first_message=True)
         # _make_chat_request 의 session_id 값은 헬퍼 default 따름
         expected_session = request.session_id
 
-        context = await _run_pipeline(request, bedrock, supabase, settings)
+        context = await _run_pipeline(request, bedrock, postgres, settings)
 
         assert context.session_id == expected_session
 
@@ -243,7 +242,7 @@ class TestRunPipeline:
 
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         http_request = _make_http_request()
         request = _make_chat_request(is_first_message=True)
 
@@ -265,7 +264,7 @@ class TestRunPipeline:
 
         with patch("app.api.chat._run_pipeline", side_effect=_spy_pipeline), \
              patch("app.api.chat.stream_sse_response", side_effect=lambda *a, **k: _mock_stream_gen()):
-            await chat(request, http_request, settings, bedrock, supabase)
+            await chat(request, http_request, settings, bedrock, postgres)
 
         assert captured == [request.session_id]
 
@@ -273,7 +272,7 @@ class TestRunPipeline:
         """history가 HistoryMessage → dict로 변환된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         request = _make_chat_request(
             is_first_message=False,
@@ -302,7 +301,7 @@ class TestRunPipeline:
              patch("app.api.chat.classify_intent", side_effect=_mock_classify), \
              patch("app.api.chat.search_documents", side_effect=_mock_search):
 
-            await _run_pipeline(request, bedrock, supabase, settings)
+            await _run_pipeline(request, bedrock, postgres, settings)
 
             ctx = contexts_captured[0]
             assert len(ctx.history) == 2
@@ -320,7 +319,7 @@ class TestAnswerCacheCompleteness:
     async def test_cache_saved_with_all_fields(self):
         """학사규정 정상 답변 시 question, embedding, answer, source_doc_ids, sources 모두 저장."""
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         context = PipelineContext(
             original_question="휴학 기간은?",
@@ -329,10 +328,10 @@ class TestAnswerCacheCompleteness:
             source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="학사요람.pdf", page=10)],
         )
 
-        await _save_answer_cache(context, ["최대 ", "4년입니다."], bedrock, supabase)
+        await _save_answer_cache(context, ["최대 ", "4년입니다."], bedrock, postgres)
 
-        supabase.upsert_answer_cache.assert_called_once()
-        cache: AnswerCache = supabase.upsert_answer_cache.call_args[0][0]
+        postgres.upsert_answer_cache.assert_called_once()
+        cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
         assert cache.question == "휴학 기간은?"
         assert len(cache.embedding) == 1024
         assert cache.answer == "최대 4년입니다."
@@ -348,7 +347,7 @@ class TestAnswerCacheCompleteness:
     async def test_cache_fields_never_empty(self, question, answer):
         """캐시 저장 시 필수 필드가 비어있지 않다."""
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         context = PipelineContext(
             original_question=question,
@@ -357,9 +356,9 @@ class TestAnswerCacheCompleteness:
             source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
         )
 
-        await _save_answer_cache(context, [answer], bedrock, supabase)
+        await _save_answer_cache(context, [answer], bedrock, postgres)
 
-        cache: AnswerCache = supabase.upsert_answer_cache.call_args[0][0]
+        cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
         assert cache.question
         assert cache.embedding
         assert cache.answer
@@ -369,7 +368,7 @@ class TestAnswerCacheCompleteness:
     async def test_save_reuses_cached_embedding(self):
         """semantic_cache가 보관한 임베딩을 재사용 (Task 16) — embed_texts 호출 X."""
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         cached_embedding = [0.42] * 1024
         context = PipelineContext(
@@ -382,16 +381,16 @@ class TestAnswerCacheCompleteness:
             embedded_question_input_type="search_query",
         )
 
-        await _save_answer_cache(context, ["답변"], bedrock, supabase)
+        await _save_answer_cache(context, ["답변"], bedrock, postgres)
 
         bedrock.embed_texts.assert_not_called()
-        cache: AnswerCache = supabase.upsert_answer_cache.call_args[0][0]
+        cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
         assert cache.embedding == cached_embedding
 
     async def test_save_creates_new_embedding_when_input_type_mismatch(self):
         """input_type 이 search_query 가 아니면 새로 호출 (silent degradation 가드)."""
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         context = PipelineContext(
             original_question="휴학 기간은?",
@@ -403,7 +402,7 @@ class TestAnswerCacheCompleteness:
             embedded_question_input_type="search_document",  # ← 잘못 set된 케이스
         )
 
-        await _save_answer_cache(context, ["답변"], bedrock, supabase)
+        await _save_answer_cache(context, ["답변"], bedrock, postgres)
 
         bedrock.embed_texts.assert_called_once_with(
             ["휴학 기간은?"], input_type="search_query"
@@ -412,7 +411,7 @@ class TestAnswerCacheCompleteness:
     async def test_save_creates_new_embedding_when_no_cache(self):
         """context.question_embedding이 None이면 새로 임베딩 (예: cache 단계가 실패한 케이스)."""
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         context = PipelineContext(
             original_question="휴학 기간은?",
@@ -423,7 +422,7 @@ class TestAnswerCacheCompleteness:
         # question_embedding은 기본값 None
         assert context.question_embedding is None
 
-        await _save_answer_cache(context, ["답변"], bedrock, supabase)
+        await _save_answer_cache(context, ["답변"], bedrock, postgres)
 
         bedrock.embed_texts.assert_called_once_with(
             ["휴학 기간은?"], input_type="search_query"
@@ -432,7 +431,7 @@ class TestAnswerCacheCompleteness:
     async def test_save_creates_new_embedding_when_text_mismatch(self):
         """embedded_question_text가 original_question과 다르면 새로 임베딩 (방어)."""
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         context = PipelineContext(
             original_question="원본 질문",
@@ -443,7 +442,7 @@ class TestAnswerCacheCompleteness:
             embedded_question_text="다른 텍스트",  # mismatch
         )
 
-        await _save_answer_cache(context, ["답변"], bedrock, supabase)
+        await _save_answer_cache(context, ["답변"], bedrock, postgres)
 
         bedrock.embed_texts.assert_called_once_with(
             ["원본 질문"], input_type="search_query"
@@ -461,7 +460,7 @@ class TestNoCacheForChitchatAndFallback:
         """잡담 경로에서는 캐시가 저장되지 않는다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         http_request = _make_http_request()
 
         context = PipelineContext(
@@ -477,17 +476,17 @@ class TestNoCacheForChitchatAndFallback:
 
             chunks = []
             async for chunk in _streaming_wrapper(
-                context, bedrock, supabase, settings, http_request, is_first_message=True
+                context, bedrock, postgres, settings, http_request, is_first_message=True
             ):
                 chunks.append(chunk)
 
-        supabase.upsert_answer_cache.assert_not_called()
+        postgres.upsert_answer_cache.assert_not_called()
 
     async def test_fallback_no_cache(self):
         """폴백 경로에서는 캐시가 저장되지 않는다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         http_request = _make_http_request()
 
         context = PipelineContext(
@@ -504,17 +503,17 @@ class TestNoCacheForChitchatAndFallback:
             mock_sse.return_value = _mock_stream()
 
             async for _ in _streaming_wrapper(
-                context, bedrock, supabase, settings, http_request, is_first_message=True
+                context, bedrock, postgres, settings, http_request, is_first_message=True
             ):
                 pass
 
-        supabase.upsert_answer_cache.assert_not_called()
+        postgres.upsert_answer_cache.assert_not_called()
 
     async def test_cache_hit_no_cache(self):
         """캐시 히트 경로에서는 새로운 캐시를 저장하지 않는다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         http_request = _make_http_request()
 
         context = PipelineContext(
@@ -532,11 +531,11 @@ class TestNoCacheForChitchatAndFallback:
             mock_sse.return_value = _mock_stream()
 
             async for _ in _streaming_wrapper(
-                context, bedrock, supabase, settings, http_request, is_first_message=True
+                context, bedrock, postgres, settings, http_request, is_first_message=True
             ):
                 pass
 
-        supabase.upsert_answer_cache.assert_not_called()
+        postgres.upsert_answer_cache.assert_not_called()
 
 
 # ── 에러 전파 테스트 ──
@@ -548,7 +547,7 @@ class TestErrorPropagation:
         """의도 분류 단계 장애 시 예외가 전파된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         request = _make_chat_request(is_first_message=False)
 
@@ -561,16 +560,16 @@ class TestErrorPropagation:
             mock_ci.side_effect = RuntimeError("Bedrock 장애")
 
             with pytest.raises(RuntimeError, match="Bedrock 장애"):
-                await _run_pipeline(request, bedrock, supabase, settings)
+                await _run_pipeline(request, bedrock, postgres, settings)
 
     async def test_cache_search_graceful_degradation(self):
         """시맨틱 캐시 탐색 실패 시 파이프라인이 계속 진행된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         # check_cache 내부에서 예외를 잡고 graceful degradation
-        bedrock.embed_texts.side_effect = RuntimeError("Supabase 장애")
+        bedrock.embed_texts.side_effect = RuntimeError("Postgres 장애")
 
         request = _make_chat_request(is_first_message=True)
 
@@ -591,14 +590,14 @@ class TestErrorPropagation:
              patch("app.api.chat.search_documents", side_effect=_mock_search):
 
             # check_cache는 graceful degradation하므로 예외 없이 진행
-            context = await _run_pipeline(request, bedrock, supabase, settings)
+            context = await _run_pipeline(request, bedrock, postgres, settings)
             assert context.cache_hit is False
 
     async def test_cache_save_failure_does_not_affect_response(self):
         """캐시 저장 실패 시 사용자 응답에 영향 없음."""
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
-        supabase.upsert_answer_cache.side_effect = RuntimeError("DB 장애")
+        postgres = _create_postgres()
+        postgres.upsert_answer_cache.side_effect = RuntimeError("DB 장애")
 
         context = PipelineContext(
             original_question="질문",
@@ -608,9 +607,9 @@ class TestErrorPropagation:
         )
 
         # 예외가 발생하지 않아야 함
-        await _save_answer_cache(context, ["답변"], bedrock, supabase)
+        await _save_answer_cache(context, ["답변"], bedrock, postgres)
         # upsert_answer_cache가 호출되었지만 예외는 잡힘
-        supabase.upsert_answer_cache.assert_called_once()
+        postgres.upsert_answer_cache.assert_called_once()
 
 
 # ── Property 20: 파이프라인 경로 결정론 ──
@@ -633,7 +632,7 @@ class TestPipelineDeterminism:
         paths = []
         for _ in range(2):
             bedrock = _create_bedrock()
-            supabase = _create_supabase()
+            postgres = _create_postgres()
 
             async def _mock_rewrite(ctx, br, st):
                 ctx.rewritten_question = ctx.original_question
@@ -653,7 +652,7 @@ class TestPipelineDeterminism:
                  patch("app.api.chat.classify_intent", side_effect=_mock_classify), \
                  patch("app.api.chat.search_documents", side_effect=_mock_search):
 
-                ctx = await _run_pipeline(request, bedrock, supabase, settings)
+                ctx = await _run_pipeline(request, bedrock, postgres, settings)
 
                 path = (ctx.cache_hit, ctx.intent, bool(ctx.search_results))
                 paths.append(path)
@@ -669,7 +668,7 @@ class TestClientDisconnect:
         """클라이언트 disconnect 시 스트리밍이 중단된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         http_request = _make_http_request()
         http_request.is_disconnected.side_effect = [False, True]  # 두 번째에서 disconnect
 
@@ -688,7 +687,7 @@ class TestClientDisconnect:
 
             chunks = []
             async for chunk in _streaming_wrapper(
-                context, bedrock, supabase, settings, http_request, is_first_message=False
+                context, bedrock, postgres, settings, http_request, is_first_message=False
             ):
                 chunks.append(chunk)
 

@@ -18,8 +18,7 @@ from app.pipeline.vector_search import search_documents
 
 def _create_settings(**overrides: str) -> Settings:
     env = {
-        "SUPABASE_URL": "https://test.supabase.co",
-        "SUPABASE_KEY": "test-key",
+        "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
         **overrides,
     }
     # clear=True: CI/로컬 셸에 남아있는 환경변수가 테스트로 새는 것을 차단
@@ -38,14 +37,14 @@ def _create_bedrock(embedding: list[float] | None = None) -> AsyncMock:
     return bedrock
 
 
-def _create_supabase(
+def _create_postgres(
     search_results: list[SearchResult] | None = None,
     similar_questions: list[str] | None = None,
 ) -> AsyncMock:
-    supabase = AsyncMock()
-    supabase.search_documents.return_value = search_results or []
-    supabase.search_similar_questions.return_value = similar_questions or []
-    return supabase
+    postgres = AsyncMock()
+    postgres.search_documents.return_value = search_results or []
+    postgres.search_similar_questions.return_value = similar_questions or []
+    return postgres
 
 
 def _make_context(
@@ -91,10 +90,10 @@ class TestThresholdBasedRouting:
         settings = _create_settings()
         bedrock = _create_bedrock()
         results = [_make_search_result(similarity=similarity)]
-        supabase = _create_supabase(search_results=results)
+        postgres = _create_postgres(search_results=results)
 
         ctx = _make_context()
-        result = await search_documents(ctx, bedrock, supabase, settings)
+        result = await search_documents(ctx, bedrock, postgres, settings)
 
         assert result.search_results is not None
         assert len(result.search_results) > 0
@@ -109,13 +108,13 @@ class TestThresholdBasedRouting:
         """임계값 미만이면 (빈 결과) 폴백으로 유사 질문이 추출된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase(
+        postgres = _create_postgres(
             search_results=[],
             similar_questions=["유사 질문 1", "유사 질문 2"],
         )
 
         ctx = _make_context(question=question)
-        result = await search_documents(ctx, bedrock, supabase, settings)
+        result = await search_documents(ctx, bedrock, postgres, settings)
 
         assert result.search_results == []
         assert len(result.suggested_questions) == 2
@@ -130,13 +129,13 @@ class TestThresholdBasedRouting:
         settings = _create_settings()
         bedrock = _create_bedrock()
         results = [_make_search_result()] if has_results else []
-        supabase = _create_supabase(
+        postgres = _create_postgres(
             search_results=results,
             similar_questions=["질문"],
         )
 
         ctx = _make_context()
-        result = await search_documents(ctx, bedrock, supabase, settings)
+        result = await search_documents(ctx, bedrock, postgres, settings)
 
         if has_results:
             assert len(result.search_results) > 0
@@ -184,13 +183,13 @@ class TestSearchDocumentsUnit:
         """rewritten_question이 있으면 그것을 임베딩한다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         ctx = _make_context(
             question="그건 뭐야?",
             rewritten="휴학 기간은 얼마인가요?",
         )
-        await search_documents(ctx, bedrock, supabase, settings)
+        await search_documents(ctx, bedrock, postgres, settings)
 
         bedrock.embed_texts.assert_called_once_with(
             ["휴학 기간은 얼마인가요?"], input_type="search_query"
@@ -200,10 +199,10 @@ class TestSearchDocumentsUnit:
         """rewritten_question이 None이면 original_question을 임베딩한다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         ctx = _make_context(question="원본 질문", rewritten=None)
-        await search_documents(ctx, bedrock, supabase, settings)
+        await search_documents(ctx, bedrock, postgres, settings)
 
         bedrock.embed_texts.assert_called_once_with(
             ["원본 질문"], input_type="search_query"
@@ -213,12 +212,12 @@ class TestSearchDocumentsUnit:
         """검색 시 settings.SIMILARITY_THRESHOLD를 사용한다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         ctx = _make_context()
-        await search_documents(ctx, bedrock, supabase, settings)
+        await search_documents(ctx, bedrock, postgres, settings)
 
-        call_kwargs = supabase.search_documents.call_args
+        call_kwargs = postgres.search_documents.call_args
         assert call_kwargs.kwargs["threshold"] == settings.SIMILARITY_THRESHOLD
 
     async def test_source_docs_metadata_preserved(self):
@@ -229,10 +228,10 @@ class TestSearchDocumentsUnit:
             _make_search_result(doc_id=1, doc_name="학사요람.pdf", page=45, chunk_id=111),
             _make_search_result(doc_id=2, doc_name="학칙.pdf", page=10, chunk_id=222),
         ]
-        supabase = _create_supabase(search_results=results)
+        postgres = _create_postgres(search_results=results)
 
         ctx = _make_context()
-        result = await search_documents(ctx, bedrock, supabase, settings)
+        result = await search_documents(ctx, bedrock, postgres, settings)
 
         assert len(result.source_docs) == 2
         assert result.source_docs[0].doc_id == 1
@@ -246,27 +245,27 @@ class TestSearchDocumentsUnit:
         """폴백 시 search_similar_questions가 호출된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase(
+        postgres = _create_postgres(
             search_results=[],
             similar_questions=["질문1", "질문2", "질문3"],
         )
 
         ctx = _make_context()
-        result = await search_documents(ctx, bedrock, supabase, settings)
+        result = await search_documents(ctx, bedrock, postgres, settings)
 
-        supabase.search_similar_questions.assert_called_once()
+        postgres.search_similar_questions.assert_called_once()
         assert result.suggested_questions == ["질문1", "질문2", "질문3"]
 
-    async def test_fallback_passes_threshold_to_supabase(self):
+    async def test_fallback_passes_threshold_to_postgres(self):
         """이슈 #46: fallback 호출 시 settings.FALLBACK_SIMILARITY_THRESHOLD 가 전달된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase(search_results=[], similar_questions=["q"])
+        postgres = _create_postgres(search_results=[], similar_questions=["q"])
 
         ctx = _make_context()
-        await search_documents(ctx, bedrock, supabase, settings)
+        await search_documents(ctx, bedrock, postgres, settings)
 
-        call_kwargs = supabase.search_similar_questions.call_args.kwargs
+        call_kwargs = postgres.search_similar_questions.call_args.kwargs
         assert call_kwargs["threshold"] == settings.FALLBACK_SIMILARITY_THRESHOLD
         assert call_kwargs["top_k"] == settings.FALLBACK_SUGGESTED_COUNT
 
@@ -274,21 +273,21 @@ class TestSearchDocumentsUnit:
         """검색 결과가 있으면 search_similar_questions가 호출되지 않는다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase(search_results=[_make_search_result()])
+        postgres = _create_postgres(search_results=[_make_search_result()])
 
         ctx = _make_context()
-        await search_documents(ctx, bedrock, supabase, settings)
+        await search_documents(ctx, bedrock, postgres, settings)
 
-        supabase.search_similar_questions.assert_not_called()
+        postgres.search_similar_questions.assert_not_called()
 
     async def test_input_type_search_query(self):
         """임베딩 호출 시 input_type이 search_query인지 확인."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         ctx = _make_context()
-        await search_documents(ctx, bedrock, supabase, settings)
+        await search_documents(ctx, bedrock, postgres, settings)
 
         call_kwargs = bedrock.embed_texts.call_args
         assert call_kwargs.kwargs.get("input_type") == "search_query" or \
@@ -298,10 +297,10 @@ class TestSearchDocumentsUnit:
         """answer_cache에 유사 질문이 없으면 빈 리스트가 설정된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase(search_results=[], similar_questions=[])
+        postgres = _create_postgres(search_results=[], similar_questions=[])
 
         ctx = _make_context()
-        result = await search_documents(ctx, bedrock, supabase, settings)
+        result = await search_documents(ctx, bedrock, postgres, settings)
 
         assert result.suggested_questions == []
 
@@ -316,7 +315,7 @@ class TestEmbeddingReuse:
         """rewrite 미발생 + context.embedded_question_text == question → embed_texts 호출 X."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase(
+        postgres = _create_postgres(
             search_results=[_make_search_result()],
         )
 
@@ -326,25 +325,25 @@ class TestEmbeddingReuse:
         ctx.embedded_question_text = "휴학 기간은?"
         ctx.embedded_question_input_type = "search_query"
 
-        await search_documents(ctx, bedrock, supabase, settings)
+        await search_documents(ctx, bedrock, postgres, settings)
 
         bedrock.embed_texts.assert_not_called()
         # 검색에는 캐시된 임베딩이 그대로 사용됨
-        call_kwargs = supabase.search_documents.call_args
+        call_kwargs = postgres.search_documents.call_args
         assert call_kwargs.kwargs["embedding"] == cached_embedding
 
     async def test_creates_new_embedding_when_input_type_mismatch(self):
         """input_type 이 search_query 가 아니면 새로 호출 (silent degradation 가드)."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         ctx = _make_context(question="질문", rewritten=None)
         ctx.question_embedding = [0.42] * 1024
         ctx.embedded_question_text = "질문"
         ctx.embedded_question_input_type = "search_document"  # ← 잘못 set된 케이스
 
-        await search_documents(ctx, bedrock, supabase, settings)
+        await search_documents(ctx, bedrock, postgres, settings)
 
         # input_type mismatch → 재사용 거부, 새로 호출
         bedrock.embed_texts.assert_called_once_with(
@@ -355,13 +354,13 @@ class TestEmbeddingReuse:
         """rewrite로 텍스트가 달라지면 새로 임베딩한다 (의미 다른 텍스트는 재사용 X)."""
         settings = _create_settings()
         bedrock = _create_bedrock(embedding=[0.99] * 1024)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         ctx = _make_context(question="그건 뭐야?", rewritten="휴학 기간은 얼마인가요?")
         ctx.question_embedding = [0.42] * 1024
         ctx.embedded_question_text = "그건 뭐야?"  # original 측만 임베딩됨
 
-        await search_documents(ctx, bedrock, supabase, settings)
+        await search_documents(ctx, bedrock, postgres, settings)
 
         # rewritten으로 새로 임베딩 (search_query input_type 유지)
         bedrock.embed_texts.assert_called_once_with(
@@ -372,13 +371,13 @@ class TestEmbeddingReuse:
         """context.question_embedding이 None이면 새로 임베딩 (멀티턴: cache 단계 skip)."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         ctx = _make_context(question="멀티턴 질문")
         # question_embedding은 기본값 None
         assert ctx.question_embedding is None
 
-        await search_documents(ctx, bedrock, supabase, settings)
+        await search_documents(ctx, bedrock, postgres, settings)
 
         bedrock.embed_texts.assert_called_once_with(
             ["멀티턴 질문"], input_type="search_query"
@@ -388,14 +387,14 @@ class TestEmbeddingReuse:
         """vector_search는 context.question_embedding을 갱신하지 않는다 (read-only invariant)."""
         settings = _create_settings()
         bedrock = _create_bedrock(embedding=[0.99] * 1024)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         original_embedding = [0.42] * 1024
         ctx = _make_context(question="원본", rewritten="재작성됨")
         ctx.question_embedding = original_embedding
         ctx.embedded_question_text = "원본"
 
-        await search_documents(ctx, bedrock, supabase, settings)
+        await search_documents(ctx, bedrock, postgres, settings)
 
         # rewrite 분기에서 새 임베딩을 만들었지만 컨텍스트는 그대로
         assert ctx.question_embedding is original_embedding
@@ -428,20 +427,20 @@ class TestRerank:
             RERANK_ENABLED="False", VECTOR_SEARCH_TOP_K="5"
         )
         bedrock = _create_bedrock()
-        supabase = _create_supabase(search_results=_make_results(5))
+        postgres = _create_postgres(search_results=_make_results(5))
 
-        await search_documents(_make_context(), bedrock, supabase, settings)
+        await search_documents(_make_context(), bedrock, postgres, settings)
 
-        call_kwargs = supabase.search_documents.call_args.kwargs
+        call_kwargs = postgres.search_documents.call_args.kwargs
         assert call_kwargs["top_k"] == 5
 
     async def test_disabled_does_not_call_rerank(self):
         """RERANK_ENABLED=False → bedrock.rerank 미호출."""
         settings = _create_settings(RERANK_ENABLED="False")
         bedrock = _create_bedrock()
-        supabase = _create_supabase(search_results=_make_results(3))
+        postgres = _create_postgres(search_results=_make_results(3))
 
-        await search_documents(_make_context(), bedrock, supabase, settings)
+        await search_documents(_make_context(), bedrock, postgres, settings)
 
         bedrock.rerank.assert_not_called()
 
@@ -451,11 +450,11 @@ class TestRerank:
             RERANK_ENABLED="True", RETRIEVE_TOP_K_RERANK="30"
         )
         bedrock = _create_bedrock()
-        supabase = _create_supabase(search_results=_make_results(30))
+        postgres = _create_postgres(search_results=_make_results(30))
 
-        await search_documents(_make_context(), bedrock, supabase, settings)
+        await search_documents(_make_context(), bedrock, postgres, settings)
 
-        call_kwargs = supabase.search_documents.call_args.kwargs
+        call_kwargs = postgres.search_documents.call_args.kwargs
         assert call_kwargs["top_k"] == 30
 
     async def test_enabled_calls_rerank_with_documents(self):
@@ -466,10 +465,10 @@ class TestRerank:
             RERANK_TOP_N="2",
         )
         bedrock = _create_bedrock()
-        supabase = _create_supabase(search_results=_make_results(3))
+        postgres = _create_postgres(search_results=_make_results(3))
 
         await search_documents(
-            _make_context(question="휴학 절차"), bedrock, supabase, settings
+            _make_context(question="휴학 절차"), bedrock, postgres, settings
         )
 
         bedrock.rerank.assert_called_once()
@@ -489,10 +488,10 @@ class TestRerank:
         # rerank 가 index [2, 0] 으로 재정렬 (원본 idx 2 → rank 1, idx 0 → rank 2)
         bedrock.rerank.side_effect = None
         bedrock.rerank.return_value = [(2, 0.95), (0, 0.80)]
-        supabase = _create_supabase(search_results=_make_results(4))
+        postgres = _create_postgres(search_results=_make_results(4))
 
         ctx = _make_context()
-        result = await search_documents(ctx, bedrock, supabase, settings)
+        result = await search_documents(ctx, bedrock, postgres, settings)
 
         # 2건만 남고 순서는 rerank 가 정한 것
         assert len(result.search_results) == 2
@@ -509,9 +508,9 @@ class TestRerank:
         bedrock = _create_bedrock()
         bedrock.rerank.side_effect = None
         bedrock.rerank.return_value = [(1, 0.97), (0, 0.45)]
-        supabase = _create_supabase(search_results=_make_results(3))
+        postgres = _create_postgres(search_results=_make_results(3))
 
-        result = await search_documents(_make_context(), bedrock, supabase, settings)
+        result = await search_documents(_make_context(), bedrock, postgres, settings)
 
         # rerank_score 가 새 필드에 채워짐
         assert result.search_results[0].rerank_score == 0.97
@@ -530,10 +529,10 @@ class TestRerank:
         )
         bedrock = _create_bedrock()
         bedrock.rerank.side_effect = RuntimeError("도쿄 throttle 시뮬레이션")
-        supabase = _create_supabase(search_results=_make_results(5))
+        postgres = _create_postgres(search_results=_make_results(5))
 
         ctx = _make_context()
-        result = await search_documents(ctx, bedrock, supabase, settings)
+        result = await search_documents(ctx, bedrock, postgres, settings)
 
         # 임베딩 결과 상위 3개로 fallback — 검색 자체는 실패시키지 않음
         assert len(result.search_results) == 3
@@ -552,10 +551,10 @@ class TestRerank:
         settings = _create_settings(RERANK_ENABLED="True")
         bedrock = _create_bedrock()
         bedrock.rerank.side_effect = RuntimeError("rerank fail")
-        supabase = _create_supabase(search_results=_make_results(3))
+        postgres = _create_postgres(search_results=_make_results(3))
 
         with caplog.at_level(logging.WARNING, logger="app.pipeline.vector_search"):
-            await search_documents(_make_context(), bedrock, supabase, settings)
+            await search_documents(_make_context(), bedrock, postgres, settings)
 
         assert any(
             "Rerank 호출 실패" in rec.message for rec in caplog.records
@@ -565,11 +564,11 @@ class TestRerank:
         """results=[] 시 rerank 미호출 (불필요한 도쿄 호출 차단), fallback 분기 진입."""
         settings = _create_settings(RERANK_ENABLED="True")
         bedrock = _create_bedrock()
-        supabase = _create_supabase(
+        postgres = _create_postgres(
             search_results=[], similar_questions=["유사 질문"]
         )
 
-        result = await search_documents(_make_context(), bedrock, supabase, settings)
+        result = await search_documents(_make_context(), bedrock, postgres, settings)
 
         bedrock.rerank.assert_not_called()
         assert result.suggested_questions == ["유사 질문"]
@@ -585,10 +584,10 @@ class TestRerank:
         # 첫 항목은 유효, 두 번째에 out-of-range 99 → 전체 fallback
         bedrock.rerank.side_effect = None
         bedrock.rerank.return_value = [(0, 0.9), (99, 0.5)]
-        supabase = _create_supabase(search_results=_make_results(5))
+        postgres = _create_postgres(search_results=_make_results(5))
 
         ctx = _make_context()
-        result = await search_documents(ctx, bedrock, supabase, settings)
+        result = await search_documents(ctx, bedrock, postgres, settings)
 
         # 임베딩 상위 3건 순서대로 fallback — 챗 요청 자체는 살아있음 (IndexError 차단)
         # 2-pass 검증으로 부분 mutation 차단 — stale rerank_score 외부 노출 방지
@@ -605,10 +604,10 @@ class TestRerank:
         bedrock = _create_bedrock()
         bedrock.rerank.side_effect = None
         bedrock.rerank.return_value = [(-1, 0.9)]
-        supabase = _create_supabase(search_results=_make_results(5))
+        postgres = _create_postgres(search_results=_make_results(5))
 
         ctx = _make_context()
-        result = await search_documents(ctx, bedrock, supabase, settings)
+        result = await search_documents(ctx, bedrock, postgres, settings)
 
         # Python list 음수 인덱스는 wrap-around 되므로 명시적으로 차단
         assert [r.chunk_id for r in result.search_results] == [100, 101, 102]
@@ -625,18 +624,18 @@ class TestRerank:
         bedrock = _create_bedrock()
         bedrock.rerank.side_effect = None
         bedrock.rerank.return_value = []  # Cohere 빈 응답
-        supabase = _create_supabase(
+        postgres = _create_postgres(
             search_results=_make_results(5),
             similar_questions=["오라우팅되면 안 됨"],
         )
 
         ctx = _make_context()
-        result = await search_documents(ctx, bedrock, supabase, settings)
+        result = await search_documents(ctx, bedrock, postgres, settings)
 
         # silent quality regression 방지 — 임베딩 결과 살리고 suggested_questions 분기로 가지 않음
         assert len(result.search_results) == 3
         assert result.suggested_questions == []
-        supabase.search_similar_questions.assert_not_called()
+        postgres.search_similar_questions.assert_not_called()
 
 
 # ── Citation 마커: 인덱스 매핑 invariant ──
@@ -662,10 +661,10 @@ class TestCitationIndexInvariant:
             _make_search_result(doc_id=20, doc_name="B.pdf", page=2, chunk_id=200),
             _make_search_result(doc_id=30, doc_name="C.pdf", page=3, chunk_id=300),
         ]
-        supabase = _create_supabase(search_results=results)
+        postgres = _create_postgres(search_results=results)
 
         ctx = _make_context()
-        result = await search_documents(ctx, bedrock, supabase, settings)
+        result = await search_documents(ctx, bedrock, postgres, settings)
 
         # search_results.metadata["doc_name"] 과 source_docs.doc_name 이 1:1 매핑
         for i, (sr, sd) in enumerate(
@@ -691,10 +690,10 @@ class TestCitationIndexInvariant:
         # rerank 가 [2, 0, 1] 순서로 재정렬
         bedrock.rerank.side_effect = None
         bedrock.rerank.return_value = [(2, 0.95), (0, 0.85), (1, 0.75)]
-        supabase = _create_supabase(search_results=_make_results(3))
+        postgres = _create_postgres(search_results=_make_results(3))
 
         ctx = _make_context()
-        result = await search_documents(ctx, bedrock, supabase, settings)
+        result = await search_documents(ctx, bedrock, postgres, settings)
 
         # 재정렬 후에도 1:1 invariant 유지
         for i, (sr, sd) in enumerate(
@@ -737,9 +736,9 @@ class TestCitationIndexInvariant:
             _make_search_result(doc_id=2, doc_name="B.pdf", page=2, chunk_id=200),
             _make_search_result(doc_id=3, doc_name="C.pdf", page=3, chunk_id=300),
         ]
-        supabase = _create_supabase(search_results=results)
+        postgres = _create_postgres(search_results=results)
 
-        result = await search_documents(_make_context(), bedrock, supabase, settings)
+        result = await search_documents(_make_context(), bedrock, postgres, settings)
 
         chunk_ids = [s.chunk_id for s in result.source_docs]
         assert len(chunk_ids) == len(set(chunk_ids)), (

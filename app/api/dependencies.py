@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from app.clients.bedrock import BedrockClient
-from app.clients.supabase_client import SupabaseVectorClient
+from app.clients.postgres_client import PostgresVectorClient
 from app.config import Settings, get_settings
 
 
@@ -16,6 +16,6 @@ def get_bedrock_client() -> BedrockClient:
 
 
 @lru_cache
-def get_supabase_client() -> SupabaseVectorClient:
-    """SupabaseVectorClient 싱글턴 인스턴스를 반환한다."""
-    return SupabaseVectorClient(get_settings())
+def get_postgres_client() -> PostgresVectorClient:
+    """PostgresVectorClient 싱글턴 인스턴스를 반환한다."""
+    return PostgresVectorClient(get_settings())

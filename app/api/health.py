@@ -7,9 +7,9 @@ import logging
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from app.api.dependencies import get_bedrock_client, get_supabase_client
+from app.api.dependencies import get_bedrock_client, get_postgres_client
 from app.clients.bedrock import BedrockClient
-from app.clients.supabase_client import SupabaseVectorClient
+from app.clients.postgres_client import PostgresVectorClient
 
 logger = logging.getLogger(__name__)
 
@@ -62,13 +62,13 @@ router = APIRouter()
 )
 async def health_check(
     bedrock: BedrockClient = Depends(get_bedrock_client),
-    supabase: SupabaseVectorClient = Depends(get_supabase_client),
+    postgres: PostgresVectorClient = Depends(get_postgres_client),
 ):
     """서버 및 외부 의존성 상태를 확인한다.
 
     모든 의존성 정상 → HTTP 200, 하나 이상 비정상 → HTTP 503.
     """
-    vector_db_ok = await supabase.health_check()
+    vector_db_ok = await postgres.health_check()
     bedrock_llm_ok = await bedrock.health_check_llm()
     bedrock_embedding_ok = await bedrock.health_check_embedding()
 

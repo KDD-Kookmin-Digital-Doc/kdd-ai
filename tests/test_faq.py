@@ -23,8 +23,7 @@ from app.models.schemas import FAQAnalyzeRequest
 
 def _create_settings() -> Settings:
     with patch.dict(os.environ, {
-        "SUPABASE_URL": "https://test.supabase.co",
-        "SUPABASE_KEY": "test-key",
+        "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
     }, clear=True):
         return Settings(_env_file=None)
 
@@ -52,9 +51,9 @@ def _create_bedrock(n_questions: int = 5) -> AsyncMock:
     return bedrock
 
 
-def _create_supabase() -> AsyncMock:
-    supabase = AsyncMock()
-    supabase.search_documents.return_value = [
+def _create_postgres() -> AsyncMock:
+    postgres = AsyncMock()
+    postgres.search_documents.return_value = [
         SearchResult(
             chunk_id=1,
             doc_id=1,
@@ -63,7 +62,7 @@ def _create_supabase() -> AsyncMock:
             similarity_score=0.85,
         ),
     ]
-    return supabase
+    return postgres
 
 
 # ── Property 18: FAQ 분석 응답 구조 ──
@@ -77,7 +76,7 @@ class TestFAQResponseStructure:
         """각 후보에 question, draft_answer, frequency가 포함된다."""
         settings = _create_settings()
         bedrock = _create_bedrock(n_questions=6)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         questions = [f"질문 {i}" for i in range(6)]
         candidates = await analyze_faq(
@@ -85,7 +84,7 @@ class TestFAQResponseStructure:
             top_k=5,
             min_cluster_size=2,
             bedrock=bedrock,
-            supabase=supabase,
+            postgres=postgres,
             settings=settings,
         )
 
@@ -101,7 +100,7 @@ class TestFAQResponseStructure:
         """후보 수가 top_k 이하이다."""
         settings = _create_settings()
         bedrock = _create_bedrock(n_questions=10)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         questions = [f"질문 {i}" for i in range(10)]
         candidates = await analyze_faq(
@@ -109,7 +108,7 @@ class TestFAQResponseStructure:
             top_k=3,
             min_cluster_size=2,
             bedrock=bedrock,
-            supabase=supabase,
+            postgres=postgres,
             settings=settings,
         )
 
@@ -123,7 +122,7 @@ class TestFAQResponseStructure:
         """어떤 top_k 값이든 후보 수를 초과하지 않는다."""
         settings = _create_settings()
         bedrock = _create_bedrock(n_questions=8)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         questions = [f"질문 {i}" for i in range(8)]
         candidates = await analyze_faq(
@@ -131,7 +130,7 @@ class TestFAQResponseStructure:
             top_k=top_k,
             min_cluster_size=2,
             bedrock=bedrock,
-            supabase=supabase,
+            postgres=postgres,
             settings=settings,
         )
 
@@ -146,7 +145,7 @@ class TestInsufficientData:
         """질문 수가 min_cluster_size 미만이면 InsufficientDataError."""
         settings = _create_settings()
         bedrock = _create_bedrock(n_questions=1)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         with pytest.raises(InsufficientDataError) as exc_info:
             await analyze_faq(
@@ -154,7 +153,7 @@ class TestInsufficientData:
                 top_k=5,
                 min_cluster_size=3,
                 bedrock=bedrock,
-                supabase=supabase,
+                postgres=postgres,
                 settings=settings,
             )
 
@@ -164,7 +163,7 @@ class TestInsufficientData:
         """엔드포인트에서 INSUFFICIENT_DATA 시 HTTP 400 반환."""
         settings = _create_settings()
         bedrock = _create_bedrock(n_questions=1)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         request = FAQAnalyzeRequest(
             questions=["질문 하나"],
@@ -172,7 +171,7 @@ class TestInsufficientData:
             min_cluster_size=3,
         )
 
-        result = await faq_analyze(request, settings, bedrock, supabase)
+        result = await faq_analyze(request, settings, bedrock, postgres)
 
         assert result.status_code == 400
         import json
@@ -183,7 +182,7 @@ class TestInsufficientData:
         """질문 수가 정확히 min_cluster_size이면 클러스터링을 시도한다."""
         settings = _create_settings()
         bedrock = _create_bedrock(n_questions=2)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         # 예외가 발생하지 않아야 함
         candidates = await analyze_faq(
@@ -191,7 +190,7 @@ class TestInsufficientData:
             top_k=5,
             min_cluster_size=2,
             bedrock=bedrock,
-            supabase=supabase,
+            postgres=postgres,
             settings=settings,
         )
 
@@ -206,7 +205,7 @@ class TestAnalyzeFAQUnit:
         """후보가 빈도순 내림차순으로 정렬된다."""
         settings = _create_settings()
         bedrock = _create_bedrock(n_questions=6)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         questions = [f"질문 {i}" for i in range(6)]
         candidates = await analyze_faq(
@@ -214,7 +213,7 @@ class TestAnalyzeFAQUnit:
             top_k=10,
             min_cluster_size=2,
             bedrock=bedrock,
-            supabase=supabase,
+            postgres=postgres,
             settings=settings,
         )
 
@@ -232,14 +231,14 @@ class TestAnalyzeFAQUnit:
         embeddings = [rng.normal(0, 1, 1024).tolist() for _ in range(5)]
         bedrock.embed_texts.return_value = embeddings
 
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         candidates = await analyze_faq(
             questions=[f"랜덤 질문 {i}" for i in range(5)],
             top_k=5,
             min_cluster_size=2,
             bedrock=bedrock,
-            supabase=supabase,
+            postgres=postgres,
             settings=settings,
         )
 
@@ -251,8 +250,8 @@ class TestAnalyzeFAQUnit:
         """벡터 검색 결과가 없으면 폴백 답변 초안이 생성된다."""
         settings = _create_settings()
         bedrock = _create_bedrock(n_questions=4)
-        supabase = _create_supabase()
-        supabase.search_documents.return_value = []  # 검색 결과 없음
+        postgres = _create_postgres()
+        postgres.search_documents.return_value = []  # 검색 결과 없음
 
         questions = [f"질문 {i}" for i in range(4)]
         candidates = await analyze_faq(
@@ -260,7 +259,7 @@ class TestAnalyzeFAQUnit:
             top_k=5,
             min_cluster_size=2,
             bedrock=bedrock,
-            supabase=supabase,
+            postgres=postgres,
             settings=settings,
         )
 
@@ -271,7 +270,7 @@ class TestAnalyzeFAQUnit:
         """답변 초안 생성 시 answer 모델을 사용한다."""
         settings = _create_settings()
         bedrock = _create_bedrock(n_questions=4)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         questions = [f"질문 {i}" for i in range(4)]
         await analyze_faq(
@@ -279,7 +278,7 @@ class TestAnalyzeFAQUnit:
             top_k=5,
             min_cluster_size=2,
             bedrock=bedrock,
-            supabase=supabase,
+            postgres=postgres,
             settings=settings,
         )
 
@@ -292,7 +291,7 @@ class TestAnalyzeFAQUnit:
         """엔드포인트 성공 시 status=success, candidates 배열 반환."""
         settings = _create_settings()
         bedrock = _create_bedrock(n_questions=6)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         request = FAQAnalyzeRequest(
             questions=[f"질문 {i}" for i in range(6)],
@@ -300,7 +299,7 @@ class TestAnalyzeFAQUnit:
             min_cluster_size=2,
         )
 
-        result = await faq_analyze(request, settings, bedrock, supabase)
+        result = await faq_analyze(request, settings, bedrock, postgres)
 
         assert result["status"] == "success"
         assert "candidates" in result
@@ -317,7 +316,7 @@ class TestParallelization:
         """클러스터 수만큼 invoke_llm 호출 + 빈도순 정렬 보존."""
         settings = _create_settings()
         bedrock = _create_bedrock(n_questions=8)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         questions = [f"질문 {i}" for i in range(8)]
         candidates = await analyze_faq(
@@ -325,7 +324,7 @@ class TestParallelization:
             top_k=10,
             min_cluster_size=2,
             bedrock=bedrock,
-            supabase=supabase,
+            postgres=postgres,
             settings=settings,
         )
 
@@ -340,7 +339,7 @@ class TestParallelization:
         """일부 cluster 실패 시 나머지는 정상 + 실패는 placeholder + warning."""
         settings = _create_settings()
         bedrock = _create_bedrock(n_questions=6)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         # 두 번째 호출만 실패 (호출 순서는 비결정적이지만 1개는 반드시 실패)
         bedrock.invoke_llm.side_effect = [
@@ -358,7 +357,7 @@ class TestParallelization:
                 top_k=10,
                 min_cluster_size=2,
                 bedrock=bedrock,
-                supabase=supabase,
+                postgres=postgres,
                 settings=settings,
             )
 
@@ -377,7 +376,7 @@ class TestParallelization:
         object.__setattr__(settings, "FAQ_CONCURRENCY", 1)
 
         bedrock = _create_bedrock(n_questions=8)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         in_flight = 0
         max_in_flight = 0
@@ -404,7 +403,7 @@ class TestParallelization:
             top_k=10,
             min_cluster_size=2,
             bedrock=bedrock,
-            supabase=supabase,
+            postgres=postgres,
             settings=settings,
         )
 
@@ -422,7 +421,7 @@ class TestParallelization:
         """
         settings = _create_settings()
         bedrock = _create_bedrock(n_questions=6)
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         # _create_bedrock(n=6) 은 cluster 2개 → invoke_llm 2회 호출 (각 cluster 1회).
         # 어느 호출이든 CancelledError 가 caller 로 propagate 되는지가 핵심.
@@ -439,6 +438,6 @@ class TestParallelization:
                 top_k=10,
                 min_cluster_size=2,
                 bedrock=bedrock,
-                supabase=supabase,
+                postgres=postgres,
                 settings=settings,
             )
