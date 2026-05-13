@@ -38,6 +38,11 @@ def postgres_setup(settings):
     PostgresVectorClient 는 lazy init — 첫 fetch/execute 호출 시점에 create_pool
     이 await 되며 mock_pool 이 self._pool 에 set. 이후 모든 호출은 mock_pool
     의 메서드를 통과한다.
+
+    yield 3-tuple: ``(client, mock_pool, mock_create_pool)``. 대부분 테스트는
+    앞 둘만 사용 (`client, mock_pool, _ = postgres_setup`). create_pool 호출
+    횟수 등 lifecycle 검증이 필요한 테스트 (예: ``test_pool_init_only_once``)
+    는 세 번째도 unpack 해서 ``await_count`` 단언.
     """
     with patch(
         "app.clients.postgres_client.asyncpg.create_pool", new_callable=AsyncMock
@@ -45,7 +50,7 @@ def postgres_setup(settings):
         mock_pool = AsyncMock()
         mock_create_pool.return_value = mock_pool
         client = PostgresVectorClient(settings)
-        yield client, mock_pool
+        yield client, mock_pool, mock_create_pool
 
 
 # ── search_documents 테스트 ──
@@ -53,7 +58,7 @@ def postgres_setup(settings):
 
 class TestSearchDocuments:
     async def test_success(self, postgres_setup):
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetch.return_value = [
             {
                 "chunk_id": 1001,
@@ -82,7 +87,7 @@ class TestSearchDocuments:
         assert results[1].metadata["page"] == 11
 
     async def test_empty_results(self, postgres_setup):
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetch.return_value = []
 
         results = await client.search_documents([0.1] * 1024)
@@ -90,7 +95,7 @@ class TestSearchDocuments:
         assert results == []
 
     async def test_custom_params(self, postgres_setup):
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetch.return_value = []
 
         await client.search_documents([0.1] * 1024, top_k=10, threshold=0.8)
@@ -109,7 +114,7 @@ class TestSearchDocuments:
 
 class TestSearchAnswerCache:
     async def test_cache_hit(self, postgres_setup):
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetchrow.return_value = {
             "question": "휴학 기간",
             "answer": "최대 4년입니다.",
@@ -126,7 +131,7 @@ class TestSearchAnswerCache:
         assert len(result.sources) == 1
 
     async def test_cache_miss(self, postgres_setup):
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetchrow.return_value = None
 
         result = await client.search_answer_cache([0.1] * 1024)
@@ -135,7 +140,7 @@ class TestSearchAnswerCache:
 
     async def test_default_ttl_from_settings(self, postgres_setup):
         """ttl_days 미지정 시 settings.CACHE_TTL_DAYS(기본 90) 사용."""
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetchrow.return_value = None
 
         await client.search_answer_cache([0.1] * 1024)
@@ -149,7 +154,7 @@ class TestSearchAnswerCache:
         )
 
     async def test_custom_threshold_and_ttl(self, postgres_setup):
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetchrow.return_value = None
 
         await client.search_answer_cache(
@@ -166,7 +171,7 @@ class TestSearchAnswerCache:
 
     async def test_sources_none_returns_empty_list(self, postgres_setup):
         """sources 값이 None 이면 빈 리스트로 반환."""
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetchrow.return_value = {
             "question": "질문",
             "answer": "답변",
@@ -185,7 +190,7 @@ class TestSearchAnswerCache:
 
 class TestSearchSimilarQuestions:
     async def test_success(self, postgres_setup):
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetch.return_value = [
             {"question": "휴학 신청 방법"},
             {"question": "복학 절차"},
@@ -197,7 +202,7 @@ class TestSearchSimilarQuestions:
         assert result == ["휴학 신청 방법", "복학 절차", "졸업 요건"]
 
     async def test_empty_results(self, postgres_setup):
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetch.return_value = []
 
         result = await client.search_similar_questions([0.1] * 1024)
@@ -206,7 +211,7 @@ class TestSearchSimilarQuestions:
 
     async def test_threshold_passed_to_rpc(self, postgres_setup):
         """이슈 #46: match_threshold 인자가 RPC 에 그대로 전달된다."""
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetch.return_value = []
 
         await client.search_similar_questions(
@@ -222,7 +227,7 @@ class TestSearchSimilarQuestions:
 
     async def test_default_threshold_is_zero(self, postgres_setup):
         """후방 호환성: threshold 미지정 시 0.0 전달."""
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetch.return_value = []
 
         await client.search_similar_questions([0.1] * 1024)
@@ -238,7 +243,7 @@ class TestSearchSimilarQuestions:
 class TestReplaceDocumentChunks:
     async def test_calls_rpc_with_doc_id_and_chunks(self, postgres_setup):
         """단일 RPC 호출로 doc_id 와 chunks 페이로드를 전달한다."""
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetchval.return_value = 2
 
         chunks = [
@@ -265,7 +270,7 @@ class TestReplaceDocumentChunks:
 
     async def test_empty_chunks_skips_rpc(self, postgres_setup):
         """빈 chunks 리스트는 RPC 호출 없이 0 반환 (기존 데이터 보존)."""
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
 
         count = await client.replace_document_chunks(99, [])
 
@@ -274,7 +279,7 @@ class TestReplaceDocumentChunks:
 
     async def test_returns_zero_for_none(self, postgres_setup):
         """RPC 가 None 반환 시 0 (방어)."""
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetchval.return_value = None
 
         chunks = [{"chunk_id": 1, "content": "x", "embedding": [0.1] * 1024, "metadata": {}}]
@@ -284,7 +289,7 @@ class TestReplaceDocumentChunks:
 
     async def test_rpc_failure_propagates(self, postgres_setup):
         """RPC 실패는 호출자로 전파된다 (트랜잭션 롤백은 DB 측 책임)."""
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetchval.side_effect = Exception("RPC failed")
 
         chunks = [{"chunk_id": 1, "content": "x", "embedding": [0.1] * 1024, "metadata": {}}]
@@ -298,7 +303,7 @@ class TestReplaceDocumentChunks:
 
 class TestDeleteDocumentChunks:
     async def test_success(self, postgres_setup):
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetch.return_value = [
             {"chunk_id": 1},
             {"chunk_id": 2},
@@ -313,7 +318,7 @@ class TestDeleteDocumentChunks:
         )
 
     async def test_no_matching_docs(self, postgres_setup):
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetch.return_value = []
 
         count = await client.delete_document_chunks(12345)
@@ -326,7 +331,7 @@ class TestDeleteDocumentChunks:
 
 class TestInvalidateCacheByDocId:
     async def test_success(self, postgres_setup):
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetch.return_value = [{"id": 10}, {"id": 11}]
 
         count = await client.invalidate_cache_by_doc_id(1)
@@ -334,7 +339,7 @@ class TestInvalidateCacheByDocId:
         assert count == 2
 
     async def test_no_matching_cache(self, postgres_setup):
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetch.return_value = []
 
         count = await client.invalidate_cache_by_doc_id(1)
@@ -343,7 +348,7 @@ class TestInvalidateCacheByDocId:
 
     async def test_doc_id_passed_as_native_bigint(self, postgres_setup):
         """asyncpg 는 BIGINT[] native 처리 — supabase-py stringify 우회 불필요."""
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetch.return_value = []
 
         await client.invalidate_cache_by_doc_id(20240001)
@@ -360,7 +365,7 @@ class TestInvalidateCacheByDocId:
 class TestUpsertAnswerCache:
     async def test_success(self, postgres_setup):
         """upsert_answer_cache RPC 호출 시 모든 필드가 정확히 전달된다."""
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.execute.return_value = None
 
         cache = AnswerCache(
@@ -384,7 +389,7 @@ class TestUpsertAnswerCache:
 
     async def test_does_not_use_raw_table_insert(self, postgres_setup):
         """이슈 #49 잠금: upsert 는 RPC 경로만 사용. raw INSERT/UPDATE 직접 호출 X."""
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.execute.return_value = None
 
         cache = AnswerCache(
@@ -411,7 +416,7 @@ class TestUpsertAnswerCache:
 
 class TestHealthCheck:
     async def test_healthy(self, postgres_setup):
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetchval.return_value = 1
 
         assert await client.health_check() is True
@@ -420,7 +425,7 @@ class TestHealthCheck:
         )
 
     async def test_unhealthy(self, postgres_setup):
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         mock_pool.fetchval.side_effect = Exception("Connection refused")
 
         assert await client.health_check() is False
@@ -432,7 +437,7 @@ class TestHealthCheck:
 class TestPoolLifecycle:
     async def test_close_drains_pool(self, postgres_setup):
         """close() 가 pool.close() 를 호출하고 self._pool 을 None 으로 리셋한다."""
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         # _init_pool 발동 — pool 이 set 됨
         mock_pool.fetchval.return_value = 1
         await client.health_check()
@@ -445,7 +450,7 @@ class TestPoolLifecycle:
 
     async def test_close_no_op_when_pool_not_initialized(self, postgres_setup):
         """pool 이 lazy init 되지 않은 상태에서 close() 호출해도 안전 (no-op)."""
-        client, mock_pool = postgres_setup
+        client, mock_pool, _ = postgres_setup
         # health_check 등 어떤 메서드도 호출 안 함 — pool 이 None
 
         await client.close()
@@ -454,8 +459,13 @@ class TestPoolLifecycle:
         mock_pool.close.assert_not_awaited()
 
     async def test_pool_init_only_once(self, postgres_setup):
-        """여러 메서드 호출 시 create_pool 은 최초 1회만 await."""
-        client, mock_pool = postgres_setup
+        """여러 메서드 호출 시 ``asyncpg.create_pool`` 이 최초 1회만 await 된다.
+
+        CodeRabbit CR2 — 기존엔 ``client._pool is mock_pool`` 간접 검증만 했는데
+        실제 ``await_count`` 직접 단언으로 잠금 강화. ``asyncio.Lock`` 가드(CR1)
+        와 짝을 이루는 회귀 잠금.
+        """
+        client, mock_pool, mock_create_pool = postgres_setup
         mock_pool.fetchval.return_value = 1
         mock_pool.fetch.return_value = []
 
@@ -463,7 +473,7 @@ class TestPoolLifecycle:
         await client.search_documents([0.1] * 1024)
         await client.delete_document_chunks(1)
 
-        # asyncpg.create_pool 자체는 fixture 에서 patch 되어 한 번만 호출돼야 함
-        # (mock_pool 의 _create_pool 발동 횟수 확인)
-        # 실제로는 client._pool 이 첫 호출 후 set 되므로 추가 호출 없음 — 간접 검증
+        # asyncpg.create_pool 이 정확히 1회만 await — race 가드(asyncio.Lock +
+        # double-check) 가 두 번째 호출을 차단하는지 명시 검증
+        assert mock_create_pool.await_count == 1
         assert client._pool is mock_pool

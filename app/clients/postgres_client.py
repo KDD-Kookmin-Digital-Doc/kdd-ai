@@ -30,6 +30,9 @@ class PostgresVectorClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._pool: asyncpg.Pool | None = None
+        # double-checked locking — 동시 코루틴이 _init_pool 진입 시 create_pool
+        # 가 두 번 호출돼 pool 1개 누수되는 race 차단 (CodeRabbit CR1).
+        self._pool_lock = asyncio.Lock()
 
     async def _init_pool(self) -> None:
         """Pool 을 lazy 초기화한다. 이미 만들어졌으면 no-op.
@@ -37,19 +40,25 @@ class PostgresVectorClient:
         ``asyncio.wait_for`` 로 pool 생성 자체에 timeout 강제 — RDS endpoint
         무응답 시 startup/health_check 가 무한정 hang 하는 사고 차단.
         ``command_timeout`` (쿼리 단위) 과 별개로 connect/handshake 가드.
+
+        ``asyncio.Lock`` + double-check 로 동시 진입 race 차단. 첫 가드는
+        lock 미획득 fast-path, lock 안의 두 번째 가드가 실제 atomic 보장.
         """
         if self._pool is not None:
             return
-        self._pool = await asyncio.wait_for(
-            asyncpg.create_pool(
-                dsn=self._settings.DATABASE_URL,
-                min_size=self._settings.POSTGRES_POOL_MIN_SIZE,
-                max_size=self._settings.POSTGRES_POOL_MAX_SIZE,
-                command_timeout=self._settings.POSTGRES_TIMEOUT,
-                init=self._init_connection,
-            ),
-            timeout=self._settings.POSTGRES_TIMEOUT,
-        )
+        async with self._pool_lock:
+            if self._pool is not None:
+                return
+            self._pool = await asyncio.wait_for(
+                asyncpg.create_pool(
+                    dsn=self._settings.DATABASE_URL,
+                    min_size=self._settings.POSTGRES_POOL_MIN_SIZE,
+                    max_size=self._settings.POSTGRES_POOL_MAX_SIZE,
+                    command_timeout=self._settings.POSTGRES_TIMEOUT,
+                    init=self._init_connection,
+                ),
+                timeout=self._settings.POSTGRES_TIMEOUT,
+            )
 
     @staticmethod
     async def _init_connection(conn: asyncpg.Connection) -> None:
