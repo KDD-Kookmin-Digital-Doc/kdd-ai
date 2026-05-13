@@ -582,6 +582,12 @@ class TestCitationMarkers:
         assert "여러 문서가 동시에 근거" in system_prompt
         # 기존 "출처(문서명, 페이지)" 평문 규칙은 제거되어야 함
         assert "출처(문서명, 페이지)를 명시" not in system_prompt
+        # 외부 리뷰 M-2: escape 회귀 negative assertion. 미래에 .format() 이
+        # 빠지거나 raw 문자열로 리팩토링되어 {{{{N}}}} 4중괄호가 그대로 LLM 에
+        # 전달되는 경우를 잠근다 (substring check 만으론 "{{N}}" in "{{{{N}}}}"
+        # 가 True 라 회귀를 못 잡음).
+        assert "{{{{N}}}}" not in system_prompt
+        assert "{{{{1}}}}" not in system_prompt
 
     def test_build_doc_context_index_matches_search_results_order(self):
         """`_build_doc_context` 출력의 [문서 N] 인덱스가 search_results 순서와 일치한다.

@@ -593,3 +593,55 @@ class TestCitationContract:
         assert text_chunks[0]["content"] == (
             "휴학은 신청서를 제출합니다{{1}}. 최대 4학기{{1}}{{2}}."
         )
+
+    @patch("app.streaming.sse.generate_response")
+    async def test_marker_atomic_across_split_tokens(self, mock_gen):
+        """LLM 이 마커를 토큰 경계로 쪼개 보내도 SSE text 청크에 `{{N}}` 이
+        atomic 하게 보존된다 (외부 리뷰 M-1 회귀 잠금).
+
+        `_buffer_by_word` 가 whitespace 경계로만 flush 하므로, 마커 중간의 `{`,
+        숫자, `}` 가 별도 토큰으로 도착해도 다음 whitespace 가 올 때까지 한
+        버퍼에 누적된다. 즉 정상 마커는 자연스럽게 atomic 보호된다 (형식 변형
+        `{{ 1 }}` 같이 마커 안에 공백을 박는 경우만 분할되는데, 그건 plan
+        위험 표의 "형식 변형률 ≤ 5%" 측정 대상이라 본 회귀 범위 밖).
+
+        미래에 누군가 `_buffer_by_word` 를 line-based 등 다른 분할 방식으로
+        바꾸면 본 테스트가 회귀를 즉시 감지한다.
+        """
+        mock_gen.side_effect = _mock_generate_response(
+            ["답변은 ", "{{", "1", "}}", ". 그리고 ", "{{", "2", "}}", "."]
+        )
+
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        ctx = PipelineContext(
+            original_question="q",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[_make_source_doc()],
+        )
+
+        chunks = await _collect_chunks(
+            stream_sse_response(ctx, bedrock, settings)
+        )
+
+        text_chunks = [c for c in chunks if c["type"] == "text"]
+        combined = "".join(c["content"] for c in text_chunks)
+
+        # 마커가 한 덩어리로 보존됨
+        assert "{{1}}" in combined
+        assert "{{2}}" in combined
+        # 결합된 본문 정확성
+        assert combined == "답변은 {{1}}. 그리고 {{2}}."
+
+        # 어떤 청크도 마커를 중간에 끊지 않음 (열린 `{{` 가 있으면 같은 청크
+        # 안에 닫힌 `}}` 도 있어야 함)
+        for c in text_chunks:
+            content = c["content"]
+            if "{{" in content:
+                # 열린 마커 시작 위치 이후로 `}}` 가 같은 청크 안에 존재
+                open_idx = content.rfind("{{")
+                assert "}}" in content[open_idx:], (
+                    f"마커가 청크 경계에서 쪼개짐: {content!r} — "
+                    f"_buffer_by_word atomic 보존 회귀"
+                )
