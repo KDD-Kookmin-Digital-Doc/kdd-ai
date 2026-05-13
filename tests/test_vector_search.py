@@ -637,3 +637,79 @@ class TestRerank:
         assert len(result.search_results) == 3
         assert result.suggested_questions == []
         supabase.search_similar_questions.assert_not_called()
+
+
+# ── Citation 마커: 인덱스 매핑 invariant ──
+# delightful-greeting-dove.md plan 의 핵심 컨트랙트:
+# LLM 프롬프트의 [문서 N] 인덱스 == FE meta.sources[N-1] == ctx.source_docs[N-1]
+
+
+class TestCitationIndexInvariant:
+    """`{{N}}` 마커 도입의 전제 — search_results 순서 == source_docs 순서.
+
+    `vector_search.py:71-72` 에서 동일 `results` 리스트로 1:1 set 되는
+    invariant 위에 plan 의 매핑 컨트랙트가 서 있다. 미래에 누군가
+    source_docs 생성 정렬을 손대면 마커가 깨지므로 회귀를 명시적으로
+    잠근다.
+    """
+
+    async def test_source_docs_index_matches_search_results_index(self):
+        """search_results[i] 의 doc_name 이 source_docs[i].doc_name 과 항상 일치."""
+        settings = _create_settings(RERANK_ENABLED="False")
+        bedrock = _create_bedrock()
+        results = [
+            _make_search_result(doc_id=10, doc_name="A.pdf", page=1, chunk_id=100),
+            _make_search_result(doc_id=20, doc_name="B.pdf", page=2, chunk_id=200),
+            _make_search_result(doc_id=30, doc_name="C.pdf", page=3, chunk_id=300),
+        ]
+        supabase = _create_supabase(search_results=results)
+
+        ctx = _make_context()
+        result = await search_documents(ctx, bedrock, supabase, settings)
+
+        # search_results.metadata["doc_name"] 과 source_docs.doc_name 이 1:1 매핑
+        for i, (sr, sd) in enumerate(
+            zip(result.search_results, result.source_docs, strict=True)
+        ):
+            assert sr.metadata["doc_name"] == sd.doc_name, (
+                f"인덱스 {i}: search_results['doc_name']={sr.metadata['doc_name']} "
+                f"!= source_docs.doc_name={sd.doc_name} — {{N}} 마커 invariant 깨짐"
+            )
+            assert sr.doc_id == sd.doc_id
+            assert sr.chunk_id == sd.chunk_id
+
+    async def test_invariant_preserved_after_rerank_reorder(self):
+        """rerank 가 순서를 바꿔도 search_results 와 source_docs 는 같은 새 순서 공유."""
+        from app.pipeline.llm_generator import _build_doc_context
+
+        settings = _create_settings(
+            RERANK_ENABLED="True",
+            RETRIEVE_TOP_K_RERANK="3",
+            RERANK_TOP_N="3",
+        )
+        bedrock = _create_bedrock()
+        # rerank 가 [2, 0, 1] 순서로 재정렬
+        bedrock.rerank.side_effect = None
+        bedrock.rerank.return_value = [(2, 0.95), (0, 0.85), (1, 0.75)]
+        supabase = _create_supabase(search_results=_make_results(3))
+
+        ctx = _make_context()
+        result = await search_documents(ctx, bedrock, supabase, settings)
+
+        # 재정렬 후에도 1:1 invariant 유지
+        for i, (sr, sd) in enumerate(
+            zip(result.search_results, result.source_docs, strict=True)
+        ):
+            assert sr.metadata["doc_name"] == sd.doc_name
+            assert sr.doc_id == sd.doc_id
+            assert sr.chunk_id == sd.chunk_id
+
+        # 그리고 LLM 이 보는 [문서 N] 라벨 doc_name 이 source_docs[N-1].doc_name 과 일치
+        # (이게 곧 {{N}} 마커가 FE meta.sources[N-1] 을 가리킨다는 plan 의 컨트랙트)
+        doc_context = _build_doc_context(result)
+        for n, sd in enumerate(result.source_docs, 1):
+            label = f"[문서 {n}] {sd.doc_name}"
+            assert label in doc_context, (
+                f"[문서 {n}] 라벨 doc_name 이 source_docs[{n-1}].doc_name 과 불일치 "
+                f"— {{N}} 마커 매핑 깨짐. 기대: {label!r}"
+            )

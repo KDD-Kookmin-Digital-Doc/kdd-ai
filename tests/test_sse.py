@@ -489,3 +489,107 @@ class TestFormatSSEEvent:
         result = _format_sse_event({"content": "한국어"})
         assert "한국어" in result
         assert "\\u" not in result
+
+
+# ── Citation 마커 컨트랙트 ──
+# delightful-greeting-dove.md plan: {{N}} ↔ meta.sources[N-1] 매핑
+
+
+class TestCitationContract:
+    """답변 본문 인용 마커 SSE 컨트랙트 회귀 잠금."""
+
+    @patch("app.streaming.sse.generate_response")
+    async def test_meta_sources_order_matches_source_docs_order(self, mock_gen):
+        """시나리오 A: meta.sources 배열 순서가 context.source_docs 순서와 동일하다.
+
+        FE 측 매핑 (`sources[N-1]`) 의 기준이 되는 첫 meta 이벤트 직렬화에서
+        순서가 어긋나면 마커가 잘못된 출처를 가리키게 됨 — 회귀 잠금.
+        """
+        mock_gen.side_effect = _mock_generate_response(["답변"])
+
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        source_docs = [
+            SourceDoc(doc_id=10, chunk_id=100, doc_name="A.pdf", page=1),
+            SourceDoc(doc_id=20, chunk_id=200, doc_name="B.pdf", page=2),
+            SourceDoc(doc_id=30, chunk_id=300, doc_name="C.pdf", page=3),
+        ]
+        ctx = PipelineContext(
+            original_question="q",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=source_docs,
+        )
+
+        chunks = await _collect_chunks(
+            stream_sse_response(ctx, bedrock, settings)
+        )
+
+        meta = chunks[0]
+        assert meta["type"] == "meta"
+        assert meta["subtype"] == "document"
+        assert [s["doc_name"] for s in meta["sources"]] == ["A.pdf", "B.pdf", "C.pdf"]
+        assert [s["doc_id"] for s in meta["sources"]] == [10, 20, 30]
+        assert [s["chunk_id"] for s in meta["sources"]] == [100, 200, 300]
+
+    @patch("app.streaming.sse.generate_response")
+    async def test_marker_in_llm_output_passthrough(self, mock_gen):
+        """시나리오 A: LLM 출력의 `{{N}}` 마커 문자열이 SSE text 청크에 그대로 통과한다.
+
+        SSE 레이어는 마커를 가공/제거/검증하지 않는다 — FE 가 렌더 시점에
+        해석할 책임. _buffer_by_word 의 whitespace 분할이 마커를 깨지 않는지도
+        간접 확인.
+        """
+        # 임의 순서 마커 (LLM 이 임의로 출력해도 통과해야 함)
+        mock_gen.side_effect = _mock_generate_response(
+            ["답변", "{{2}}", " ", "본문", "{{1}}", "."]
+        )
+
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        ctx = PipelineContext(
+            original_question="q",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[_make_source_doc()],
+        )
+
+        chunks = await _collect_chunks(
+            stream_sse_response(ctx, bedrock, settings)
+        )
+
+        text_chunks = [c for c in chunks if c["type"] == "text"]
+        combined = "".join(c["content"] for c in text_chunks)
+        # 마커 문자열이 가공 없이 그대로 보존
+        assert "{{2}}" in combined
+        assert "{{1}}" in combined
+        # 본문도 정확히 연결됨
+        assert combined == "답변{{2}} 본문{{1}}."
+
+    async def test_cache_hit_passes_marker_text_passthrough(self):
+        """시나리오 C: 캐시 답변에 마커가 들어 있어도 그대로 통과한다.
+
+        본 변경 후 저장되는 캐시 답변엔 마커가 포함되며, 다음 hit 시 그대로
+        FE 로 흘러야 한다 (FE 가 평문 fallback 도 처리하므로 마커 0개여도 OK).
+        """
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        ctx = PipelineContext(
+            original_question="q",
+            cache_hit=True,
+            cached_answer="휴학은 신청서를 제출합니다{{1}}. 최대 4학기{{1}}{{2}}.",
+            cached_sources=[
+                SourceDoc(doc_id=1, chunk_id=1, doc_name="A.pdf", page=1),
+                SourceDoc(doc_id=2, chunk_id=2, doc_name="B.pdf", page=2),
+            ],
+        )
+
+        chunks = await _collect_chunks(
+            stream_sse_response(ctx, bedrock, settings)
+        )
+
+        text_chunks = [c for c in chunks if c["type"] == "text"]
+        assert len(text_chunks) == 1
+        assert text_chunks[0]["content"] == (
+            "휴학은 신청서를 제출합니다{{1}}. 최대 4학기{{1}}{{2}}."
+        )

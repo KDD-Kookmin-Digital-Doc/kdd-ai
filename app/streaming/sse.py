@@ -82,6 +82,10 @@ async def stream_sse_response(
         if context.cache_hit:
             if not context.cached_answer:
                 raise ValueError("cache_hit=True이지만 cached_answer가 없습니다")
+            # Citation 컨트랙트: sources[N-1] 이 답변 본문의 {{N}} 마커와 매핑된다.
+            # 캐시 답변엔 본 변경 이전에 저장된 답변(마커 0개)이 섞일 수 있고,
+            # 본 변경 이후 저장 답변엔 마커가 포함된다. FE 는 마커 없으면 평문 렌더로
+            # graceful 처리.
             sources = [
                 {"doc_id": s.doc_id, "chunk_id": s.chunk_id, "doc_name": s.doc_name, "page": s.page}
                 for s in context.cached_sources
@@ -149,6 +153,10 @@ async def stream_sse_response(
 
         # 시나리오 A: 정상 (문서 검색 성공)
         confidence = _determine_confidence(context.search_results, settings)
+        # Citation 컨트랙트: sources[N-1] 이 답변 본문의 {{N}} 마커와 매핑된다.
+        # 순서는 context.source_docs (검색 결과 / rerank 결과) 순서 그대로이며,
+        # vector_search.py 에서 search_results 와 source_docs 가 동일 results 리스트로
+        # 1:1 set 되어 LLM 프롬프트의 [문서 N] 인덱스와 자동 정합한다.
         sources = [
             {"doc_id": s.doc_id, "chunk_id": s.chunk_id, "doc_name": s.doc_name, "page": s.page}
             for s in context.source_docs

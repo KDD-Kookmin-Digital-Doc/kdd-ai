@@ -194,12 +194,15 @@ async def _save_answer_cache(
         "4. 벡터 검색 (academic 인 경우)\n"
         "5. LLM 스트리밍 답변 생성\n\n"
         "### SSE 이벤트 포맷\n"
-        "응답은 `text/event-stream` 이며 각 이벤트는 `data: <JSON>\\n\\n` 형태입니다.\n"
+        "응답은 `text/event-stream` 이며 각 이벤트는 `data: <JSON>\\n\\n` 형태입니다. "
+        "정상(academic) 시나리오는 `meta`(문서/신뢰도) → `text*`(스트리밍) → `done`(usage) 순으로 흐릅니다.\n"
         "```\n"
-        "data: {\"type\": \"text\", \"content\": \"안녕\"}\n\n"
-        "data: {\"type\": \"source\", \"sources\": [...]}\n\n"
-        "data: {\"type\": \"done\"}\n\n"
+        "data: {\"type\": \"meta\", \"subtype\": \"document\", \"confidence\": \"high\", \"sources\": [...]}\n\n"
+        "data: {\"type\": \"text\", \"content\": \"휴학은 신청서를 제출합니다{{1}}. \"}\n\n"
+        "data: {\"type\": \"done\", \"usage\": {\"prompt_tokens\": 0, \"completion_tokens\": 0, \"total_tokens\": 0}}\n\n"
         "```\n\n"
+        "답변 본문 내 `{{N}}` 패턴은 `meta.sources[N-1]` 출처를 가리키는 인용 마커입니다. "
+        "FE 는 마커를 클릭 가능한 footnote 로 렌더링하고, 마커가 없거나 범위 밖이면 평문으로 graceful degrade 합니다.\n\n"
         "### 테스트 (curl)\n"
         "```bash\n"
         "curl -N -X POST http://localhost:8000/api/chat \\\n"
@@ -214,10 +217,10 @@ async def _save_answer_cache(
             "content": {
                 "text/event-stream": {
                     "example": (
+                        'data: {"type": "meta", "subtype": "document", "confidence": "high", "sources": [{"doc_id": 20240001, "chunk_id": 1012, "doc_name": "학사규정_2024", "page": 12}]}\n\n'
                         'data: {"type": "text", "content": "휴학은 "}\n\n'
-                        'data: {"type": "text", "content": "신청서를 제출하면 됩니다."}\n\n'
-                        'data: {"type": "source", "sources": [{"doc_id": 20240001, "chunk_id": 1012, "doc_name": "학사규정_2024", "page": 12}]}\n\n'
-                        'data: {"type": "done"}\n\n'
+                        'data: {"type": "text", "content": "신청서를 제출하면 됩니다{{1}}."}\n\n'
+                        'data: {"type": "done", "usage": {"prompt_tokens": 320, "completion_tokens": 48, "total_tokens": 368}}\n\n'
                     )
                 }
             },
