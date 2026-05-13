@@ -477,3 +477,35 @@ class TestPoolLifecycle:
         # double-check) 가 두 번째 호출을 차단하는지 명시 검증
         assert mock_create_pool.await_count == 1
         assert client._pool is mock_pool
+
+    async def test_concurrent_init_creates_pool_only_once(self, postgres_setup):
+        """동시 코루틴 다발이 _init_pool 진입해도 create_pool 1회만 await.
+
+        asyncio.Lock + double-check race 가드(CR1) 의 실제 회귀 잠금.
+
+        AsyncMock 의 await 가 yield point 를 만들지 않아 sequential 시나리오에선
+        race 가 트리거 안 됨(test_pool_init_only_once 의 한계). create_pool
+        side_effect 에 ``asyncio.sleep(0)`` 명시 yield 를 주입해 첫 coroutine
+        이 create_pool 안에서 yield → 나머지 9개가 1차 가드 통과 후 Lock 으로
+        대기 → race 가드 실제 발동.
+
+        - Lock 제거 시: 10개 모두 동시 create_pool 진입 → ``await_count = 10`` → fail
+        - double-check 제거 시: lock 으로 직렬화 되지만 차례로 모두 create_pool → fail
+        - Lock + double-check (현재): ``await_count = 1`` → pass
+        """
+        import asyncio as _aio  # 명시 import (테스트 가독성)
+
+        client, mock_pool, mock_create_pool = postgres_setup
+        mock_pool.fetchval.return_value = 1
+
+        async def _slow_create_pool(*args, **kwargs):
+            await _aio.sleep(0)  # yield point — 다른 coroutine 깨어날 기회
+            return mock_pool
+
+        mock_create_pool.side_effect = _slow_create_pool
+
+        # 10개 동시 호출 — race 시도
+        await _aio.gather(*[client.health_check() for _ in range(10)])
+
+        assert mock_create_pool.await_count == 1
+        assert client._pool is mock_pool
