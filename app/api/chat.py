@@ -140,7 +140,13 @@ async def _save_answer_cache(
     bedrock: BedrockClient,
     supabase: SupabaseVectorClient,
 ) -> None:
-    """답변 캐시를 비동기로 저장한다. 실패 시 로그만 남긴다."""
+    """답변 캐시를 비동기로 저장한다. 실패 시 로그만 남긴다.
+
+    context 는 read-only 가정 — background task 진입 시점에 호출자(chat handler)는
+    이미 SSE 응답을 완료해 context 를 더 이상 변조하지 않는다. set-once + lifecycle
+    분리 패턴이라 동시 변조 race 없음. 미래에 분석/메트릭 등 응답 완료 후에도
+    context 를 만지는 코드가 추가되면 snapshot 패턴 도입 검토.
+    """
     try:
         full_answer = "".join(answer_parts)
         # Task 16: semantic_cache가 original_question을 search_query로 임베딩한 결과를 재사용.

@@ -113,6 +113,9 @@ class PipelineContext:
     source_docs: list[SourceDoc] = field(default_factory=list)
     suggested_questions: list[str] = field(default_factory=list)
     token_usage: TokenUsage = field(default_factory=TokenUsage)
+    # 단일 임베딩 contract. Multi-query retrieval(RAG-Fusion/HyDE) 또는
+    # hybrid search 도입 시 list[QueryEmbedding] 같은 별도 필드로 확장 검토
+    # (기존 필드는 유지 가능, 신규 필드 추가 패턴이라 contract breaking change 아님).
     question_embedding: list[float] | None = None
     embedded_question_text: str | None = None
     embedded_question_input_type: str | None = None
