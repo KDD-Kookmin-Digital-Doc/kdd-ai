@@ -19,8 +19,7 @@ from app.api.documents import delete_document, embed_document
 
 def _create_settings() -> Settings:
     with patch.dict(os.environ, {
-        "SUPABASE_URL": "https://test.supabase.co",
-        "SUPABASE_KEY": "test-key",
+        "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
     }, clear=True):
         return Settings(_env_file=None)
 
@@ -48,18 +47,18 @@ def _create_bedrock(fail_indices: set[int] | None = None) -> AsyncMock:
     return bedrock
 
 
-def _create_supabase(inserted_count: int | None = None) -> AsyncMock:
-    supabase = AsyncMock()
-    supabase.delete_document_chunks.return_value = 0
-    supabase.invalidate_cache_by_doc_id.return_value = 0
+def _create_postgres(inserted_count: int | None = None) -> AsyncMock:
+    postgres = AsyncMock()
+    postgres.delete_document_chunks.return_value = 0
+    postgres.invalidate_cache_by_doc_id.return_value = 0
     if inserted_count is not None:
-        supabase.replace_document_chunks.return_value = inserted_count
+        postgres.replace_document_chunks.return_value = inserted_count
     else:
         # 기본: 전달된 chunks 수만큼 반환
-        supabase.replace_document_chunks.side_effect = (
+        postgres.replace_document_chunks.side_effect = (
             lambda doc_id, chunks: len(chunks)
         )
-    return supabase
+    return postgres
 
 
 def _make_embed_request(
@@ -97,10 +96,10 @@ class TestEmbedResponseConsistency:
         """성공 시 embedded_chunk_count == len(chunks)."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         request = _make_embed_request(doc_id=doc_id, chunk_count=chunk_count)
 
-        result = await embed_document(request, settings, bedrock, supabase)
+        result = await embed_document(request, settings, bedrock, postgres)
 
         assert result["doc_id"] == doc_id
         assert result["embedded_chunk_count"] == chunk_count
@@ -110,10 +109,10 @@ class TestEmbedResponseConsistency:
         """배치 실패 시 해당 배치의 모든 청크가 failed_chunks에 기록된다 (Option B)."""
         settings = _create_settings()
         bedrock = _create_bedrock(fail_indices={1})  # 단일 배치에 포함 → 배치 전체 실패
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         request = _make_embed_request(chunk_count=3)
 
-        result = await embed_document(request, settings, bedrock, supabase)
+        result = await embed_document(request, settings, bedrock, postgres)
 
         assert result["status"] == "partial_failure"
         assert result["embedded_chunk_count"] + len(result["failed_chunks"]) == 3
@@ -131,12 +130,12 @@ class TestEmbedRoundtrip:
         """삽입 요청에 content, page, doc_name, enforcement_date가 포함된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         request = _make_embed_request(chunk_count=2, doc_name="학칙.pdf")
 
-        await embed_document(request, settings, bedrock, supabase)
+        await embed_document(request, settings, bedrock, postgres)
 
-        call_args = supabase.replace_document_chunks.call_args
+        call_args = postgres.replace_document_chunks.call_args
         doc_id_arg = call_args[0][0]
         chunks_arg = call_args[0][1]
 
@@ -153,7 +152,7 @@ class TestEmbedRoundtrip:
         """enforcement_date=None일 때 metadata에 키 자체가 들어가지 않는다 (옵션 A)."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         request = EmbedRequest(
             doc_id=1,
             metadata=DocumentMetadata(
@@ -164,9 +163,9 @@ class TestEmbedRoundtrip:
             chunks=[DocumentChunk(chunk_id=1, content="내용", page=1)],
         )
 
-        await embed_document(request, settings, bedrock, supabase)
+        await embed_document(request, settings, bedrock, postgres)
 
-        chunks_arg = supabase.replace_document_chunks.call_args[0][1]
+        chunks_arg = postgres.replace_document_chunks.call_args[0][1]
         assert "enforcement_date" not in chunks_arg[0]["metadata"]
         assert chunks_arg[0]["metadata"]["doc_name"] == "test.pdf"
         assert chunks_arg[0]["metadata"]["category"] == "학사"
@@ -181,7 +180,7 @@ class TestEmbedRoundtrip:
         """임의 content와 page가 삽입 요청에 보존된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         request = EmbedRequest(
             doc_id=999,
@@ -193,9 +192,9 @@ class TestEmbedRoundtrip:
             chunks=[DocumentChunk(chunk_id=77, content=content, page=page)],
         )
 
-        await embed_document(request, settings, bedrock, supabase)
+        await embed_document(request, settings, bedrock, postgres)
 
-        chunks_arg = supabase.replace_document_chunks.call_args[0][1]
+        chunks_arg = postgres.replace_document_chunks.call_args[0][1]
         assert chunks_arg[0]["chunk_id"] == 77
         assert chunks_arg[0]["content"] == content
         assert chunks_arg[0]["metadata"]["page"] == page
@@ -209,25 +208,25 @@ class TestEmbedDocumentUnit:
         """적재 시 RPC 단일 호출로 처리된다 (delete/invalidate 별도 호출 X — 이슈 #43)."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         request = _make_embed_request()
 
-        await embed_document(request, settings, bedrock, supabase)
+        await embed_document(request, settings, bedrock, postgres)
 
-        supabase.replace_document_chunks.assert_called_once()
+        postgres.replace_document_chunks.assert_called_once()
         # 비원자 3단계 호출 경로는 사용되지 않음
-        supabase.delete_document_chunks.assert_not_called()
-        supabase.invalidate_cache_by_doc_id.assert_not_called()
-        supabase.insert_document_chunks.assert_not_called()
+        postgres.delete_document_chunks.assert_not_called()
+        postgres.invalidate_cache_by_doc_id.assert_not_called()
+        postgres.insert_document_chunks.assert_not_called()
 
     async def test_embedding_uses_search_document_type(self):
         """임베딩 호출 시 input_type이 search_document이다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         request = _make_embed_request(chunk_count=1)
 
-        await embed_document(request, settings, bedrock, supabase)
+        await embed_document(request, settings, bedrock, postgres)
 
         call_kwargs = bedrock.embed_texts.call_args
         assert call_kwargs.kwargs.get("input_type") == "search_document" or \
@@ -237,39 +236,39 @@ class TestEmbedDocumentUnit:
         """삽입 청크에 1024차원 embedding이 포함된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         request = _make_embed_request(chunk_count=1)
 
-        await embed_document(request, settings, bedrock, supabase)
+        await embed_document(request, settings, bedrock, postgres)
 
-        chunks_arg = supabase.replace_document_chunks.call_args[0][1]
+        chunks_arg = postgres.replace_document_chunks.call_args[0][1]
         assert len(chunks_arg[0]["embedding"]) == 1024
 
     async def test_all_chunks_fail(self):
         """모든 청크가 실패하면 embedded_chunk_count=0, RPC 미호출 (기존 데이터 보존)."""
         settings = _create_settings()
         bedrock = _create_bedrock(fail_indices={0, 1, 2})
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         request = _make_embed_request(chunk_count=3)
 
-        result = await embed_document(request, settings, bedrock, supabase)
+        result = await embed_document(request, settings, bedrock, postgres)
 
         assert result["status"] == "partial_failure"
         assert result["embedded_chunk_count"] == 0
         assert len(result["failed_chunks"]) == 3
-        supabase.replace_document_chunks.assert_not_called()
-        supabase.delete_document_chunks.assert_not_called()
-        supabase.invalidate_cache_by_doc_id.assert_not_called()
-        supabase.insert_document_chunks.assert_not_called()
+        postgres.replace_document_chunks.assert_not_called()
+        postgres.delete_document_chunks.assert_not_called()
+        postgres.invalidate_cache_by_doc_id.assert_not_called()
+        postgres.insert_document_chunks.assert_not_called()
 
     async def test_failed_chunk_has_index_and_error(self):
         """실패한 배치의 각 청크가 index와 error 메시지로 기록된다 (Option B)."""
         settings = _create_settings()
         bedrock = _create_bedrock(fail_indices={2})  # 단일 배치 포함 → 배치 전체 실패
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         request = _make_embed_request(chunk_count=3)
 
-        result = await embed_document(request, settings, bedrock, supabase)
+        result = await embed_document(request, settings, bedrock, postgres)
 
         assert len(result["failed_chunks"]) == 3
         assert all(f["error"] == "embedding_failed" for f in result["failed_chunks"])
@@ -279,10 +278,10 @@ class TestEmbedDocumentUnit:
         """응답에 요청한 doc_id가 포함된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         request = _make_embed_request(doc_id=99)
 
-        result = await embed_document(request, settings, bedrock, supabase)
+        result = await embed_document(request, settings, bedrock, postgres)
 
         assert result["doc_id"] == 99
 
@@ -290,11 +289,11 @@ class TestEmbedDocumentUnit:
         """청크 수가 BATCH_SIZE 이하면 embed_texts를 1회만 호출한다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         chunk_count = max(1, settings.EMBED_BATCH_SIZE - 1)
         request = _make_embed_request(chunk_count=chunk_count)
 
-        result = await embed_document(request, settings, bedrock, supabase)
+        result = await embed_document(request, settings, bedrock, postgres)
 
         assert bedrock.embed_texts.await_count == 1
         assert result["embedded_chunk_count"] == chunk_count
@@ -305,10 +304,10 @@ class TestEmbedDocumentUnit:
         settings = _create_settings()
         batch_size = settings.EMBED_BATCH_SIZE
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         request = _make_embed_request(chunk_count=batch_size)
 
-        await embed_document(request, settings, bedrock, supabase)
+        await embed_document(request, settings, bedrock, postgres)
 
         assert bedrock.embed_texts.await_count == 1
         call_args = bedrock.embed_texts.call_args_list[0]
@@ -319,12 +318,12 @@ class TestEmbedDocumentUnit:
         settings = _create_settings()
         batch_size = settings.EMBED_BATCH_SIZE
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         remainder = 8
         chunk_count = batch_size * 2 + remainder
         request = _make_embed_request(chunk_count=chunk_count)
 
-        result = await embed_document(request, settings, bedrock, supabase)
+        result = await embed_document(request, settings, bedrock, postgres)
 
         assert bedrock.embed_texts.await_count == 3
         batch_sizes = [
@@ -343,10 +342,10 @@ class TestEmbedDocumentUnit:
         # 배치 0 (0 ~ batch_size-1) 성공, 배치 1 (batch_size ~ chunk_count-1) 실패
         fail_index = batch_size + 1
         bedrock = _create_bedrock(fail_indices={fail_index})
-        supabase = _create_supabase()
+        postgres = _create_postgres()
         request = _make_embed_request(chunk_count=chunk_count)
 
-        result = await embed_document(request, settings, bedrock, supabase)
+        result = await embed_document(request, settings, bedrock, postgres)
 
         assert result["status"] == "partial_failure"
         assert result["embedded_chunk_count"] == batch_size
@@ -358,8 +357,8 @@ class TestEmbedDocumentUnit:
             f["index"] for f in result["failed_chunks"]
         ] == expected_failed_indices
         # 성공분은 단일 RPC로 atomic 적재됨
-        supabase.replace_document_chunks.assert_called_once()
-        rpc_args = supabase.replace_document_chunks.call_args[0]
+        postgres.replace_document_chunks.assert_called_once()
+        rpc_args = postgres.replace_document_chunks.call_args[0]
         assert rpc_args[0] == 1
         assert len(rpc_args[1]) == batch_size
 
@@ -367,15 +366,15 @@ class TestEmbedDocumentUnit:
         """동일 doc_id 재적재 시 단일 RPC로 atomic하게 처리된다."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
+        postgres = _create_postgres()
 
         request = _make_embed_request(doc_id=1, chunk_count=2)
 
-        result = await embed_document(request, settings, bedrock, supabase)
+        result = await embed_document(request, settings, bedrock, postgres)
 
         # RPC 단일 호출 — DELETE+INSERT가 트랜잭션 내부에서 처리
-        supabase.replace_document_chunks.assert_called_once()
-        assert supabase.replace_document_chunks.call_args[0][0] == 1
+        postgres.replace_document_chunks.assert_called_once()
+        assert postgres.replace_document_chunks.call_args[0][0] == 1
         assert result["embedded_chunk_count"] == 2
         assert result["status"] == "success"
 
@@ -383,19 +382,19 @@ class TestEmbedDocumentUnit:
         """RPC 실패 시 비원자 3단계 경로로 폴백하지 않는다 (데이터 손실 방지 — 이슈 #43)."""
         settings = _create_settings()
         bedrock = _create_bedrock()
-        supabase = _create_supabase()
-        supabase.replace_document_chunks.side_effect = RuntimeError(
-            "Supabase RPC unavailable"
+        postgres = _create_postgres()
+        postgres.replace_document_chunks.side_effect = RuntimeError(
+            "Postgres RPC unavailable"
         )
         request = _make_embed_request(chunk_count=2)
 
-        with pytest.raises(RuntimeError, match="Supabase RPC unavailable"):
-            await embed_document(request, settings, bedrock, supabase)
+        with pytest.raises(RuntimeError, match="Postgres RPC unavailable"):
+            await embed_document(request, settings, bedrock, postgres)
 
         # RPC가 실패해도 레거시 비원자 경로는 호출되지 않음
-        supabase.delete_document_chunks.assert_not_called()
-        supabase.invalidate_cache_by_doc_id.assert_not_called()
-        supabase.insert_document_chunks.assert_not_called()
+        postgres.delete_document_chunks.assert_not_called()
+        postgres.invalidate_cache_by_doc_id.assert_not_called()
+        postgres.insert_document_chunks.assert_not_called()
 
 
 # ── Property 10: 문서 삭제 및 캐시 연쇄 무효화 ──
@@ -407,24 +406,24 @@ class TestDeleteCascade:
 
     async def test_delete_calls_both_tables(self):
         """삭제 시 documents와 answer_cache 모두에서 삭제가 수행된다."""
-        supabase = _create_supabase()
-        supabase.delete_document_chunks.return_value = 5
-        supabase.invalidate_cache_by_doc_id.return_value = 2
+        postgres = _create_postgres()
+        postgres.delete_document_chunks.return_value = 5
+        postgres.invalidate_cache_by_doc_id.return_value = 2
 
-        result = await delete_document(1, supabase)
+        result = await delete_document(1, postgres)
 
-        supabase.delete_document_chunks.assert_called_once_with(1)
-        supabase.invalidate_cache_by_doc_id.assert_called_once_with(1)
+        postgres.delete_document_chunks.assert_called_once_with(1)
+        postgres.invalidate_cache_by_doc_id.assert_called_once_with(1)
         assert result["deleted_chunk_count"] == 5
         assert result["invalidated_cache_count"] == 2
 
     async def test_response_includes_all_fields(self):
         """응답에 status, doc_id, deleted_chunk_count, invalidated_cache_count, message 포함."""
-        supabase = _create_supabase()
-        supabase.delete_document_chunks.return_value = 3
-        supabase.invalidate_cache_by_doc_id.return_value = 1
+        postgres = _create_postgres()
+        postgres.delete_document_chunks.return_value = 3
+        postgres.invalidate_cache_by_doc_id.return_value = 1
 
-        result = await delete_document(99, supabase)
+        result = await delete_document(99, postgres)
 
         assert result["status"] == "success"
         assert result["doc_id"] == 99
@@ -440,11 +439,11 @@ class TestDeleteCascade:
     )
     async def test_counts_match_db_response(self, doc_id, chunk_count, cache_count):
         """응답 카운트가 DB 삭제 결과와 일치한다."""
-        supabase = _create_supabase()
-        supabase.delete_document_chunks.return_value = chunk_count
-        supabase.invalidate_cache_by_doc_id.return_value = cache_count
+        postgres = _create_postgres()
+        postgres.delete_document_chunks.return_value = chunk_count
+        postgres.invalidate_cache_by_doc_id.return_value = cache_count
 
-        result = await delete_document(doc_id, supabase)
+        result = await delete_document(doc_id, postgres)
 
         assert result["deleted_chunk_count"] == chunk_count
         assert result["invalidated_cache_count"] == cache_count
@@ -460,11 +459,11 @@ class TestDeleteIdempotency:
 
     async def test_nonexistent_doc_returns_zero_counts(self):
         """존재하지 않는 doc_id도 카운트 0으로 성공 응답."""
-        supabase = _create_supabase()
-        supabase.delete_document_chunks.return_value = 0
-        supabase.invalidate_cache_by_doc_id.return_value = 0
+        postgres = _create_postgres()
+        postgres.delete_document_chunks.return_value = 0
+        postgres.invalidate_cache_by_doc_id.return_value = 0
 
-        result = await delete_document(12345, supabase)
+        result = await delete_document(12345, postgres)
 
         assert result["status"] == "success"
         assert result["deleted_chunk_count"] == 0
@@ -472,12 +471,12 @@ class TestDeleteIdempotency:
 
     async def test_double_delete_always_succeeds(self):
         """같은 doc_id를 2번 삭제해도 항상 성공."""
-        supabase = _create_supabase()
-        supabase.delete_document_chunks.side_effect = [5, 0]
-        supabase.invalidate_cache_by_doc_id.side_effect = [2, 0]
+        postgres = _create_postgres()
+        postgres.delete_document_chunks.side_effect = [5, 0]
+        postgres.invalidate_cache_by_doc_id.side_effect = [2, 0]
 
-        result1 = await delete_document(1, supabase)
-        result2 = await delete_document(1, supabase)
+        result1 = await delete_document(1, postgres)
+        result2 = await delete_document(1, postgres)
 
         assert result1["status"] == "success"
         assert result1["deleted_chunk_count"] == 5
@@ -490,10 +489,10 @@ class TestDeleteIdempotency:
     )
     async def test_multiple_deletes_always_success(self, repeat):
         """N번 삭제해도 항상 status=success."""
-        supabase = _create_supabase()
-        supabase.delete_document_chunks.return_value = 0
-        supabase.invalidate_cache_by_doc_id.return_value = 0
+        postgres = _create_postgres()
+        postgres.delete_document_chunks.return_value = 0
+        postgres.invalidate_cache_by_doc_id.return_value = 0
 
         for _ in range(repeat):
-            result = await delete_document(1, supabase)
+            result = await delete_document(1, postgres)
             assert result["status"] == "success"

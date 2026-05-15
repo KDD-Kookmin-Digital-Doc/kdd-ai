@@ -23,8 +23,7 @@ from app.pipeline.query_rewriter import (
 
 def _create_settings(**overrides: str) -> Settings:
     env = {
-        "SUPABASE_URL": "https://test.supabase.co",
-        "SUPABASE_KEY": "test-key",
+        "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
         **overrides,
     }
     # clear=True: CI/로컬 셸에 남아있는 환경변수가 테스트로 새는 것을 차단

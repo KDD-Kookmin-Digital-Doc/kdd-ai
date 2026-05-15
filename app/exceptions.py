@@ -2,7 +2,7 @@
 
 
 class ServiceUnavailableError(Exception):
-    """외부 서비스(Bedrock, Supabase) 연결 실패 시 발생하는 예외."""
+    """외부 서비스(Bedrock, RDS PostgreSQL) 연결 실패 시 발생하는 예외."""
 
     def __init__(self, service: str, detail: str = ""):
         self.service = service

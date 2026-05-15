@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from app.clients.bedrock import BedrockClient
-from app.clients.supabase_client import SupabaseVectorClient
+from app.clients.postgres_client import PostgresVectorClient
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 async def validate_startup(
     settings: Settings,
     bedrock: BedrockClient,
-    supabase: SupabaseVectorClient,
+    postgres: PostgresVectorClient,
 ) -> None:
     """서버 시작 시 외부 의존성 연결과 임베딩 차원 정합성을 검증한다.
 
@@ -22,10 +22,10 @@ async def validate_startup(
     """
     logger.info("서버 시작 검증 시작")
 
-    # 1. Supabase 연결 확인
-    if not await supabase.health_check():
-        raise RuntimeError("서버 시작 실패: Supabase Vector DB 연결에 실패했습니다.")
-    logger.info("Supabase 연결 확인 완료")
+    # 1. Postgres 연결 확인
+    if not await postgres.health_check():
+        raise RuntimeError("서버 시작 실패: Postgres Vector DB 연결에 실패했습니다.")
+    logger.info("Postgres 연결 확인 완료")
 
     # 2. Bedrock LLM 연결 확인
     if not await bedrock.health_check_llm():

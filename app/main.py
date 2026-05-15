@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import chat, documents, faq, health
 from app.api.chat import wait_pending_cache_writes
-from app.api.dependencies import get_bedrock_client, get_supabase_client
+from app.api.dependencies import get_bedrock_client, get_postgres_client
 from app.api.error_handlers import register_error_handlers
 from app.config import get_settings
 from app.logging_context import SessionIdFilter
@@ -24,14 +24,15 @@ async def lifespan(app: FastAPI):
     """서버 시작/종료 이벤트를 관리한다."""
     settings = get_settings()
     bedrock = get_bedrock_client()
-    supabase = get_supabase_client()
+    postgres = get_postgres_client()
 
-    await validate_startup(settings, bedrock, supabase)
+    await validate_startup(settings, bedrock, postgres)
     logger.info("AI 서버 시작 완료")
 
     yield
 
     await wait_pending_cache_writes()
+    await postgres.close()
     logger.info("AI 서버 종료")
 
 

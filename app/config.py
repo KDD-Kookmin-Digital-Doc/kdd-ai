@@ -30,9 +30,10 @@ class Settings(BaseSettings):
     # (Cohere v4 read_timeout 초과 회피 + Throttling 균형). 양수 강제.
     EMBED_BATCH_SIZE: int = Field(default=48, gt=0)
 
-    # Supabase 설정
-    SUPABASE_URL: str
-    SUPABASE_KEY: str
+    # PostgreSQL (RDS) 설정 — D3 마이그레이션 (Supabase → RDS asyncpg)
+    DATABASE_URL: str
+    POSTGRES_POOL_MIN_SIZE: int = Field(default=2, gt=0)
+    POSTGRES_POOL_MAX_SIZE: int = Field(default=10, gt=0)
 
     # 유사도 임계값
     SIMILARITY_THRESHOLD: float = 0.75
@@ -90,6 +91,16 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_postgres_pool_size(self) -> "Settings":
+        # min > max 면 asyncpg.create_pool 이 런타임에 ValueError 를 던짐 — fail-fast.
+        if self.POSTGRES_POOL_MIN_SIZE > self.POSTGRES_POOL_MAX_SIZE:
+            raise ValueError(
+                f"POSTGRES_POOL_MIN_SIZE({self.POSTGRES_POOL_MIN_SIZE}) 은 "
+                f"POSTGRES_POOL_MAX_SIZE({self.POSTGRES_POOL_MAX_SIZE}) 이하여야 합니다."
+            )
+        return self
+
     # CORS 설정 (미설정 시 CORS 비활성)
     CORS_ORIGINS: list[str] = []
 
@@ -108,7 +119,7 @@ class Settings(BaseSettings):
     BEDROCK_EMBEDDING_TIMEOUT: int = 30
     # 임베딩 connect 타임아웃 (read와 분리 — connect 실패는 빠르게 감지)
     BEDROCK_EMBEDDING_CONNECT_TIMEOUT: int = 10
-    SUPABASE_TIMEOUT: int = 10
+    POSTGRES_TIMEOUT: int = 10
 
     # 로깅 레벨 (DEBUG/INFO/WARNING/ERROR/CRITICAL).
     # 알파테스트 동안엔 DEBUG 권장 (임베딩 재사용 등 최적화 효과 검증용),

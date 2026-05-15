@@ -10,7 +10,7 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_distances
 
 from app.clients.bedrock import BedrockClient
-from app.clients.supabase_client import SupabaseVectorClient
+from app.clients.postgres_client import PostgresVectorClient
 from app.config import Settings
 from app.models.pipeline import PipelineContext
 
@@ -33,7 +33,7 @@ async def analyze_faq(
     top_k: int,
     min_cluster_size: int,
     bedrock: BedrockClient,
-    supabase: SupabaseVectorClient,
+    postgres: PostgresVectorClient,
     settings: Settings,
 ) -> list[dict]:
     """질문 배열을 클러스터링하여 FAQ 후보를 생성한다.
@@ -100,7 +100,7 @@ async def analyze_faq(
                 question=cluster["representative_question"],
                 embedding=cluster["representative_embedding"],
                 bedrock=bedrock,
-                supabase=supabase,
+                postgres=postgres,
                 settings=settings,
             )
 
@@ -137,12 +137,12 @@ async def _generate_draft_answer(
     question: str,
     embedding: list[float],
     bedrock: BedrockClient,
-    supabase: SupabaseVectorClient,
+    postgres: PostgresVectorClient,
     settings: Settings,
 ) -> str:
     """대표 질문에 대해 벡터 검색 → LLM 답변 초안을 생성한다."""
     # 벡터 검색
-    results = await supabase.search_documents(
+    results = await postgres.search_documents(
         embedding=embedding,
         top_k=settings.VECTOR_SEARCH_TOP_K,
         threshold=settings.SIMILARITY_THRESHOLD,

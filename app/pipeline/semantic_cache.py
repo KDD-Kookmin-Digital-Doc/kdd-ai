@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from app.clients.bedrock import BedrockClient
-from app.clients.supabase_client import SupabaseVectorClient
+from app.clients.postgres_client import PostgresVectorClient
 from app.config import Settings
 from app.models.pipeline import PipelineContext, SourceDoc
 
@@ -16,7 +16,7 @@ async def check_cache(
     context: PipelineContext,
     is_first_message: bool,
     bedrock: BedrockClient,
-    supabase: SupabaseVectorClient,
+    postgres: PostgresVectorClient,
     settings: Settings,
 ) -> PipelineContext:
     """시맨틱 캐시를 탐색하여 PipelineContext를 갱신한다.
@@ -49,7 +49,7 @@ async def check_cache(
             "search_query",
         )
 
-        cache_match = await supabase.search_answer_cache(
+        cache_match = await postgres.search_answer_cache(
             embedding=question_embedding,
             threshold=settings.CACHE_SIMILARITY_THRESHOLD,
         )

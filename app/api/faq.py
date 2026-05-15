@@ -7,9 +7,9 @@ import logging
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from app.api.dependencies import get_bedrock_client, get_supabase_client
+from app.api.dependencies import get_bedrock_client, get_postgres_client
 from app.clients.bedrock import BedrockClient
-from app.clients.supabase_client import SupabaseVectorClient
+from app.clients.postgres_client import PostgresVectorClient
 from app.config import Settings, get_settings
 from app.models.schemas import ErrorResponse, FAQAnalyzeRequest
 from app.services.faq_analyzer import InsufficientDataError, analyze_faq
@@ -55,7 +55,7 @@ async def faq_analyze(
     request: FAQAnalyzeRequest,
     settings: Settings = Depends(get_settings),
     bedrock: BedrockClient = Depends(get_bedrock_client),
-    supabase: SupabaseVectorClient = Depends(get_supabase_client),
+    postgres: PostgresVectorClient = Depends(get_postgres_client),
 ):
     """누적 질문을 클러스터링하여 FAQ 후보를 추출한다."""
     try:
@@ -64,7 +64,7 @@ async def faq_analyze(
             top_k=request.top_k,
             min_cluster_size=request.min_cluster_size,
             bedrock=bedrock,
-            supabase=supabase,
+            postgres=postgres,
             settings=settings,
         )
 
