@@ -121,6 +121,12 @@ class Settings(BaseSettings):
     BEDROCK_EMBEDDING_CONNECT_TIMEOUT: int = 10
     POSTGRES_TIMEOUT: int = 10
 
+    # asyncio 기본 ThreadPoolExecutor 크기. invoke_llm_stream / embed_texts /
+    # rerank / stream close 가 잠시 점유하는 I/O 스레드 풀. Python 기본
+    # (min(32, cpu+4)) 은 2 vCPU 박스에서 6 → 7번째 동시 LLM 스트림부터 큐잉.
+    # 32 = Python 자체 상한과 동일, 2GB Lightsail 에서도 스택 ~256MB 안전 마진.
+    THREAD_POOL_MAX_WORKERS: int = Field(default=32, gt=0)
+
     # 로깅 레벨 (DEBUG/INFO/WARNING/ERROR/CRITICAL).
     # 알파테스트 동안엔 DEBUG 권장 (임베딩 재사용 등 최적화 효과 검증용),
     # 운영 안정화 후 INFO로 복귀해 노이즈 정리.
