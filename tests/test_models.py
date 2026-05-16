@@ -71,6 +71,8 @@ class TestSettings:
             assert s.RETRIEVE_TOP_K_RERANK == 30
             assert s.RERANK_TOP_N == 5
             assert s.BEDROCK_RERANK_TIMEOUT == 15
+            # asyncio 기본 executor 크기 (2 vCPU Lightsail 6→32 확장)
+            assert s.THREAD_POOL_MAX_WORKERS == 32
 
     def test_log_level_normalized_to_upper(self):
         """LOG_LEVEL 은 대소문자 무관하게 받아들여 대문자로 정규화된다."""
@@ -221,6 +223,27 @@ class TestMessageHelpers:
             with patch.dict(os.environ, env, clear=True):
                 with pytest.raises(ValidationError):
                     Settings(_env_file=None)
+
+    def test_thread_pool_max_workers_must_be_positive(self):
+        """THREAD_POOL_MAX_WORKERS=0 또는 음수면 Settings 생성이 실패한다 (fail-fast)."""
+        base_env = {
+            "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
+        }
+        for bad_value in ("0", "-1"):
+            env = {**base_env, "THREAD_POOL_MAX_WORKERS": bad_value}
+            with patch.dict(os.environ, env, clear=True):
+                with pytest.raises(ValidationError):
+                    Settings(_env_file=None)
+
+    def test_thread_pool_max_workers_custom_value(self):
+        """THREAD_POOL_MAX_WORKERS 가 환경변수로 override 가능하다."""
+        env = {
+            "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
+            "THREAD_POOL_MAX_WORKERS": "64",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            s = Settings(_env_file=None)
+        assert s.THREAD_POOL_MAX_WORKERS == 64
 
 
 # ── Schema Tests ──

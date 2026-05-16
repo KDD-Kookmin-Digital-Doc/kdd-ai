@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -23,17 +25,35 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """서버 시작/종료 이벤트를 관리한다."""
     settings = get_settings()
+
+    # asyncio 기본 ThreadPoolExecutor 를 명시 크기로 교체. Python 기본
+    # (min(32, cpu+4)) 은 2 vCPU Lightsail 에서 6 → invoke_llm_stream 이
+    # 요청당 1 스레드를 점유하므로 7번째 동시 LLM 스트림부터 큐잉됨.
+    # validate_startup 의 embed_texts 도 to_thread 를 쓰므로 교체를 먼저 수행.
+    executor = ThreadPoolExecutor(
+        max_workers=settings.THREAD_POOL_MAX_WORKERS,
+        thread_name_prefix="kdd-ai-io",
+    )
+    asyncio.get_running_loop().set_default_executor(executor)
+    logger.info(
+        "기본 ThreadPoolExecutor 확장 완료: max_workers=%d",
+        settings.THREAD_POOL_MAX_WORKERS,
+    )
+
     bedrock = get_bedrock_client()
     postgres = get_postgres_client()
 
-    await validate_startup(settings, bedrock, postgres)
-    logger.info("AI 서버 시작 완료")
-
-    yield
-
-    await wait_pending_cache_writes()
-    await postgres.close()
-    logger.info("AI 서버 종료")
+    try:
+        await validate_startup(settings, bedrock, postgres)
+        logger.info("AI 서버 시작 완료")
+        yield
+    finally:
+        # startup 실패 시에도 cleanup 보장 — executor / postgres pool 좀비 차단.
+        # PostgresVectorClient.close() 는 _pool is None 가드로 idempotent.
+        await wait_pending_cache_writes()
+        await postgres.close()
+        executor.shutdown(wait=True)
+        logger.info("AI 서버 종료")
 
 
 OPENAPI_TAGS = [
