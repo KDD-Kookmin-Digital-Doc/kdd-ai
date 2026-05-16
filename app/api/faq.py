@@ -39,8 +39,18 @@ router = APIRouter()
                     "example": {
                         "status": "success",
                         "candidates": [
-                            {"representative_question": "휴학 신청 방법", "count": 14},
-                            {"representative_question": "장학금 신청 기한", "count": 9},
+                            {
+                                "question": "휴학 신청 기간 및 방법",
+                                "draft_answer": "휴학은 매 학기 지정된 기간 내에 신청해야 하며...",
+                                "category": "enrollment_status",
+                                "frequency": 42,
+                            },
+                            {
+                                "question": "학부별 졸업 학점 요건",
+                                "draft_answer": "졸업을 위해서는 총 130학점 이상을 이수해야 하며...",
+                                "category": "graduation",
+                                "frequency": 28,
+                            },
                         ],
                     }
                 }
