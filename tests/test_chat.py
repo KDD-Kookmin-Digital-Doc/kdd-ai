@@ -89,6 +89,7 @@ def _make_cache_match() -> CacheMatch:
         answer="캐시된 답변",
         similarity_score=0.97,
         sources=[{"doc_id": 1, "chunk_id": 1, "doc_name": "학사요람.pdf", "page": 45}],
+        confidence="high",
     )
 
 
@@ -328,7 +329,7 @@ class TestAnswerCacheCompleteness:
             source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="학사요람.pdf", page=10)],
         )
 
-        await _save_answer_cache(context, ["최대 ", "4년입니다."], bedrock, postgres)
+        await _save_answer_cache(context, ["최대 ", "4년입니다."], bedrock, postgres, _create_settings())
 
         postgres.upsert_answer_cache.assert_called_once()
         cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
@@ -356,7 +357,7 @@ class TestAnswerCacheCompleteness:
             source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
         )
 
-        await _save_answer_cache(context, [answer], bedrock, postgres)
+        await _save_answer_cache(context, [answer], bedrock, postgres, _create_settings())
 
         cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
         assert cache.question
@@ -381,7 +382,7 @@ class TestAnswerCacheCompleteness:
             embedded_question_input_type="search_query",
         )
 
-        await _save_answer_cache(context, ["답변"], bedrock, postgres)
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
 
         bedrock.embed_texts.assert_not_called()
         cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
@@ -402,7 +403,7 @@ class TestAnswerCacheCompleteness:
             embedded_question_input_type="search_document",  # ← 잘못 set된 케이스
         )
 
-        await _save_answer_cache(context, ["답변"], bedrock, postgres)
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
 
         bedrock.embed_texts.assert_called_once_with(
             ["휴학 기간은?"], input_type="search_query"
@@ -422,7 +423,7 @@ class TestAnswerCacheCompleteness:
         # question_embedding은 기본값 None
         assert context.question_embedding is None
 
-        await _save_answer_cache(context, ["답변"], bedrock, postgres)
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
 
         bedrock.embed_texts.assert_called_once_with(
             ["휴학 기간은?"], input_type="search_query"
@@ -442,11 +443,66 @@ class TestAnswerCacheCompleteness:
             embedded_question_text="다른 텍스트",  # mismatch
         )
 
-        await _save_answer_cache(context, ["답변"], bedrock, postgres)
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
 
         bedrock.embed_texts.assert_called_once_with(
             ["원본 질문"], input_type="search_query"
         )
+
+    async def test_save_includes_high_confidence(self):
+        """search_results 최고 유사도가 HIGH 임계값(0.9) 이상이면 'high' 박제.
+
+        SSE 시나리오 C(cache hit) 가 동일 박제값을 노출해 시나리오 A(cache miss)
+        와 UX 정합을 유지하기 위한 회귀 잠금.
+        """
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+
+        context = PipelineContext(
+            original_question="질문",
+            intent="academic",
+            search_results=[_make_search_result(similarity=0.95)],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+        )
+
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
+
+        cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
+        assert cache.confidence == "high"
+
+    async def test_save_includes_medium_confidence(self):
+        """MEDIUM(0.8) ≤ max < HIGH(0.9) 이면 'medium' 박제."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+
+        context = PipelineContext(
+            original_question="질문",
+            intent="academic",
+            search_results=[_make_search_result(similarity=0.85)],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+        )
+
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
+
+        cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
+        assert cache.confidence == "medium"
+
+    async def test_save_includes_low_confidence(self):
+        """max < MEDIUM(0.8) 이면 'low' 박제."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+
+        context = PipelineContext(
+            original_question="질문",
+            intent="academic",
+            search_results=[_make_search_result(similarity=0.5)],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+        )
+
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
+
+        cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
+        assert cache.confidence == "low"
 
 
 # ── Property 16: 잡담/Fallback 캐시 미저장 ──
@@ -607,7 +663,7 @@ class TestErrorPropagation:
         )
 
         # 예외가 발생하지 않아야 함
-        await _save_answer_cache(context, ["답변"], bedrock, postgres)
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
         # upsert_answer_cache가 호출되었지만 예외는 잡힘
         postgres.upsert_answer_cache.assert_called_once()
 

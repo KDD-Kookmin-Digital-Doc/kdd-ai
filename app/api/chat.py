@@ -21,7 +21,7 @@ from app.pipeline.intent_router import classify_intent
 from app.pipeline.query_rewriter import rewrite_query
 from app.pipeline.semantic_cache import check_cache
 from app.pipeline.vector_search import search_documents
-from app.streaming.sse import stream_sse_response
+from app.streaming.sse import determine_confidence, stream_sse_response
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +128,7 @@ async def _streaming_wrapper(
     # 스트리밍 완료 후 캐시 저장 (정상 완료 + 학사규정 답변 시에만)
     if should_cache and stream_completed and answer_buffer:
         task = asyncio.create_task(
-            _save_answer_cache(context, answer_buffer, bedrock, postgres)
+            _save_answer_cache(context, answer_buffer, bedrock, postgres, settings)
         )
         _pending_cache_writes.add(task)
         task.add_done_callback(_pending_cache_writes.discard)
@@ -139,6 +139,7 @@ async def _save_answer_cache(
     answer_parts: list[str],
     bedrock: BedrockClient,
     postgres: PostgresVectorClient,
+    settings: Settings,
 ) -> None:
     """답변 캐시를 비동기로 저장한다. 실패 시 로그만 남긴다.
 
@@ -172,6 +173,9 @@ async def _save_answer_cache(
             {"doc_id": s.doc_id, "chunk_id": s.chunk_id, "doc_name": s.doc_name, "page": s.page}
             for s in context.source_docs
         ]
+        # 저장 시점의 confidence 를 박제 — cache hit 시 SSE meta(시나리오 C)에
+        # 동일 값을 노출해 cache miss(시나리오 A)와 UX 정합 유지.
+        confidence = determine_confidence(context.search_results, settings)
 
         cache = AnswerCache(
             question=context.original_question,
@@ -179,6 +183,7 @@ async def _save_answer_cache(
             answer=full_answer,
             source_doc_ids=source_doc_ids,
             sources=sources,
+            confidence=confidence,
         )
         await postgres.upsert_answer_cache(cache)
         logger.info("답변 캐시 저장 완료: %r", context.original_question)
@@ -205,6 +210,12 @@ async def _save_answer_cache(
         "```\n"
         "data: {\"type\": \"meta\", \"subtype\": \"document\", \"confidence\": \"high\", \"sources\": [...]}\n\n"
         "data: {\"type\": \"text\", \"content\": \"휴학은 신청서를 제출합니다{{1}}. \"}\n\n"
+        "data: {\"type\": \"done\", \"usage\": {\"prompt_tokens\": 0, \"completion_tokens\": 0, \"total_tokens\": 0}}\n\n"
+        "```\n\n"
+        "캐시 히트 시에는 `meta`(subtype=cache) 에 저장 시점의 `confidence` 박제값이 노출되며 `text` 1회 + `done` 으로 종료됩니다.\n"
+        "```\n"
+        "data: {\"type\": \"meta\", \"subtype\": \"cache\", \"cache_hit\": true, \"confidence\": \"high\", \"sources\": [...]}\n\n"
+        "data: {\"type\": \"text\", \"content\": \"휴학은 신청서를 제출합니다{{1}}.\"}\n\n"
         "data: {\"type\": \"done\", \"usage\": {\"prompt_tokens\": 0, \"completion_tokens\": 0, \"total_tokens\": 0}}\n\n"
         "```\n\n"
         "답변 본문 내 `{{N}}` 패턴은 `meta.sources[N-1]` 출처를 가리키는 인용 마커입니다. "

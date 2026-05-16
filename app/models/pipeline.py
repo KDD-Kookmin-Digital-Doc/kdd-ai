@@ -74,6 +74,7 @@ class AnswerCache:
     answer: str
     source_doc_ids: list[int]
     sources: list[dict]
+    confidence: str
 
 
 @dataclass
@@ -84,6 +85,7 @@ class CacheMatch:
     answer: str
     similarity_score: float
     sources: list[dict]
+    confidence: str
 
 
 @dataclass
@@ -108,6 +110,7 @@ class PipelineContext:
     cache_hit: bool = False
     cached_answer: str | None = None
     cached_sources: list[SourceDoc] = field(default_factory=list)
+    cached_confidence: str | None = None
     user_context: str = ""
     history: list = field(default_factory=list)
     source_docs: list[SourceDoc] = field(default_factory=list)

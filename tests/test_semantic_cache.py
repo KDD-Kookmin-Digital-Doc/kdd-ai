@@ -65,12 +65,14 @@ def _make_cache_match(
     answer: str = "캐시된 답변",
     similarity: float = 0.97,
     sources: list[dict] | None = None,
+    confidence: str = "high",
 ) -> CacheMatch:
     return CacheMatch(
         question=question,
         answer=answer,
         similarity_score=similarity,
         sources=sources or [{"doc_id": 1, "chunk_id": 1, "doc_name": "학사요람.pdf", "page": 45}],
+        confidence=confidence,
     )
 
 
@@ -197,6 +199,24 @@ class TestCheckCacheUnit:
         assert result.cached_sources[0].chunk_id == 42
         assert result.cached_sources[0].doc_name == "학사요람.pdf"
         assert result.cached_sources[0].page == 45
+
+    async def test_cache_hit_propagates_confidence(
+        self, mock_settings, mock_bedrock, mock_postgres
+    ):
+        """캐시 히트 시 CacheMatch.confidence 가 PipelineContext.cached_confidence 로 전파된다.
+
+        SSE 시나리오 C(cache) meta 가 시나리오 A(document) 와 동일하게 confidence
+        를 노출하도록 박제값을 끝까지 흘려보내는 회귀 잠금.
+        """
+        mock_postgres.search_answer_cache.return_value = _make_cache_match(
+            confidence="medium",
+        )
+
+        ctx = _make_context("질문")
+        result = await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
+
+        assert result.cache_hit is True
+        assert result.cached_confidence == "medium"
 
     async def test_cache_miss_leaves_context_unchanged(
         self, mock_settings, mock_bedrock, mock_postgres
