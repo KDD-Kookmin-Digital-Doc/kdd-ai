@@ -62,6 +62,7 @@ async def check_cache(
         context.cache_hit = True
         context.cached_answer = cache_match.answer
         context.cached_sources = parsed_sources
+        context.cached_confidence = cache_match.confidence
         logger.info(
             "시맨틱 캐시 히트 (유사도=%.4f, 질문=%r)",
             cache_match.similarity_score,

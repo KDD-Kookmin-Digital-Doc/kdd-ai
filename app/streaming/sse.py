@@ -46,7 +46,7 @@ def _format_sse_event(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _determine_confidence(
+def determine_confidence(
     search_results: list,
     settings: Settings,
 ) -> str:
@@ -94,6 +94,7 @@ async def stream_sse_response(
                 "type": "meta",
                 "subtype": "cache",
                 "cache_hit": True,
+                "confidence": context.cached_confidence,
                 "sources": sources,
             })
             yield _format_sse_event({
@@ -152,7 +153,7 @@ async def stream_sse_response(
             return
 
         # 시나리오 A: 정상 (문서 검색 성공)
-        confidence = _determine_confidence(context.search_results, settings)
+        confidence = determine_confidence(context.search_results, settings)
         # Citation 컨트랙트: sources[N-1] 이 답변 본문의 {{N}} 마커와 매핑된다.
         # 순서는 context.source_docs (검색 결과 / rerank 결과) 순서 그대로이며,
         # vector_search.py 에서 search_results 와 source_docs 가 동일 results 리스트로

@@ -18,7 +18,7 @@ from app.models.pipeline import (
 )
 from app.streaming.sse import (
     _buffer_by_word,
-    _determine_confidence,
+    determine_confidence,
     _format_sse_event,
     stream_sse_response,
 )
@@ -148,6 +148,24 @@ class TestSSEStreamStructure:
         assert chunks[0]["type"] == "fallback"
         assert "suggested_questions" in chunks[0]
         assert chunks[1]["type"] == "done"
+
+    async def test_scenario_c_meta_includes_cached_confidence(self):
+        """시나리오 C: cache 메타에 박제된 confidence 가 그대로 노출된다 (시나리오 A 와 정합)."""
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        ctx = PipelineContext(
+            original_question="q",
+            cache_hit=True,
+            cached_answer="캐시된 답변",
+            cached_sources=[_make_source_doc()],
+            cached_confidence="high",
+        )
+
+        chunks = await _collect_chunks(stream_sse_response(ctx, bedrock, settings))
+
+        assert chunks[0]["type"] == "meta"
+        assert chunks[0]["subtype"] == "cache"
+        assert chunks[0]["confidence"] == "high"
 
     async def test_scenario_c_cache_hit(self):
         """시나리오 C: meta(cache) → text → done."""
@@ -352,21 +370,21 @@ class TestDetermineConfidence:
     def test_high_confidence(self):
         settings = _create_settings()
         results = [_make_search_result(similarity=0.95)]
-        assert _determine_confidence(results, settings) == "high"
+        assert determine_confidence(results, settings) == "high"
 
     def test_medium_confidence(self):
         settings = _create_settings()
         results = [_make_search_result(similarity=0.85)]
-        assert _determine_confidence(results, settings) == "medium"
+        assert determine_confidence(results, settings) == "medium"
 
     def test_low_confidence(self):
         settings = _create_settings()
         results = [_make_search_result(similarity=0.76)]
-        assert _determine_confidence(results, settings) == "low"
+        assert determine_confidence(results, settings) == "low"
 
     def test_empty_results(self):
         settings = _create_settings()
-        assert _determine_confidence([], settings) == "low"
+        assert determine_confidence([], settings) == "low"
 
     def test_uses_max_score(self):
         """여러 결과 중 최고 유사도로 판단한다."""
@@ -376,19 +394,19 @@ class TestDetermineConfidence:
             _make_search_result(similarity=0.92),
             _make_search_result(similarity=0.80),
         ]
-        assert _determine_confidence(results, settings) == "high"
+        assert determine_confidence(results, settings) == "high"
 
     def test_exact_boundary_high(self):
         """정확히 high 임계값이면 high이다."""
         settings = _create_settings()
         results = [_make_search_result(similarity=0.9)]
-        assert _determine_confidence(results, settings) == "high"
+        assert determine_confidence(results, settings) == "high"
 
     def test_exact_boundary_medium(self):
         """정확히 medium 임계값이면 medium이다."""
         settings = _create_settings()
         results = [_make_search_result(similarity=0.8)]
-        assert _determine_confidence(results, settings) == "medium"
+        assert determine_confidence(results, settings) == "medium"
 
     def test_custom_thresholds(self):
         """settings에서 커스텀 임계값을 사용한다."""
@@ -397,7 +415,7 @@ class TestDetermineConfidence:
             CONFIDENCE_MEDIUM_THRESHOLD="0.85",
         )
         results = [_make_search_result(similarity=0.9)]
-        assert _determine_confidence(results, settings) == "medium"
+        assert determine_confidence(results, settings) == "medium"
 
 
 # ── 토큰 버퍼링 테스트 ──

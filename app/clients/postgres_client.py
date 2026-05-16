@@ -125,7 +125,7 @@ class PostgresVectorClient:
         )
         await self._init_pool()
         row = await self._pool.fetchrow(
-            "SELECT question, answer, similarity, sources "
+            "SELECT question, answer, similarity, sources, confidence "
             "FROM match_answer_cache($1, $2, $3)",
             embedding,
             threshold,
@@ -138,6 +138,7 @@ class PostgresVectorClient:
             answer=row["answer"],
             similarity_score=row["similarity"],
             sources=row["sources"] or [],
+            confidence=row["confidence"],
         )
 
     async def search_similar_questions(
@@ -215,12 +216,13 @@ class PostgresVectorClient:
         """
         await self._init_pool()
         await self._pool.execute(
-            "SELECT upsert_answer_cache($1, $2, $3, $4, $5)",
+            "SELECT upsert_answer_cache($1, $2, $3, $4, $5, $6)",
             cache.question,
             cache.embedding,
             cache.answer,
             cache.source_doc_ids,
             cache.sources,
+            cache.confidence,
         )
 
     # ── 헬스체크 ──

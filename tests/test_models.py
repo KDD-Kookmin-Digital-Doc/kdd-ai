@@ -525,9 +525,11 @@ class TestAnswerCache:
             answer="최대 4년입니다.",
             source_doc_ids=[1],
             sources=[{"doc_name": "학사요람.pdf", "page": 45}],
+            confidence="high",
         )
         assert cache.embedding is not None
         assert cache.answer == "최대 4년입니다."
+        assert cache.confidence == "high"
 
 
 class TestCacheMatch:
@@ -537,5 +539,7 @@ class TestCacheMatch:
             answer="최대 4년",
             similarity_score=0.97,
             sources=[{"doc_name": "학사요람.pdf", "page": 45}],
+            confidence="medium",
         )
         assert m.similarity_score == 0.97
+        assert m.confidence == "medium"

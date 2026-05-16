@@ -120,6 +120,7 @@ class TestSearchAnswerCache:
             "answer": "최대 4년입니다.",
             "similarity": 0.97,
             "sources": [{"doc_name": "학사요람.pdf", "page": 45}],
+            "confidence": "high",
         }
 
         result = await client.search_answer_cache([0.1] * 1024)
@@ -129,6 +130,22 @@ class TestSearchAnswerCache:
         assert result.answer == "최대 4년입니다."
         assert result.similarity_score == 0.97
         assert len(result.sources) == 1
+
+    async def test_cache_hit_returns_confidence(self, postgres_setup):
+        """fetchrow 가 confidence 컬럼을 반환하면 CacheMatch.confidence 로 매핑된다."""
+        client, mock_pool, _ = postgres_setup
+        mock_pool.fetchrow.return_value = {
+            "question": "q",
+            "answer": "a",
+            "similarity": 0.97,
+            "sources": [],
+            "confidence": "medium",
+        }
+
+        result = await client.search_answer_cache([0.1] * 1024)
+
+        assert isinstance(result, CacheMatch)
+        assert result.confidence == "medium"
 
     async def test_cache_miss(self, postgres_setup):
         client, mock_pool, _ = postgres_setup
@@ -146,7 +163,7 @@ class TestSearchAnswerCache:
         await client.search_answer_cache([0.1] * 1024)
 
         mock_pool.fetchrow.assert_called_once_with(
-            "SELECT question, answer, similarity, sources "
+            "SELECT question, answer, similarity, sources, confidence "
             "FROM match_answer_cache($1, $2, $3)",
             [0.1] * 1024,
             0.95,
@@ -162,7 +179,7 @@ class TestSearchAnswerCache:
         )
 
         mock_pool.fetchrow.assert_called_once_with(
-            "SELECT question, answer, similarity, sources "
+            "SELECT question, answer, similarity, sources, confidence "
             "FROM match_answer_cache($1, $2, $3)",
             [0.1] * 1024,
             0.9,
@@ -177,6 +194,7 @@ class TestSearchAnswerCache:
             "answer": "답변",
             "similarity": 0.96,
             "sources": None,
+            "confidence": "high",
         }
 
         result = await client.search_answer_cache([0.1] * 1024)
@@ -374,17 +392,19 @@ class TestUpsertAnswerCache:
             answer="최대 4년입니다.",
             source_doc_ids=[1],
             sources=[{"doc_name": "학사요람.pdf", "page": 45}],
+            confidence="high",
         )
 
         await client.upsert_answer_cache(cache)
 
         mock_pool.execute.assert_called_once_with(
-            "SELECT upsert_answer_cache($1, $2, $3, $4, $5)",
+            "SELECT upsert_answer_cache($1, $2, $3, $4, $5, $6)",
             "휴학 기간",
             [0.1] * 1024,
             "최대 4년입니다.",
             [1],
             [{"doc_name": "학사요람.pdf", "page": 45}],
+            "high",
         )
 
     async def test_does_not_use_raw_table_insert(self, postgres_setup):
@@ -398,6 +418,7 @@ class TestUpsertAnswerCache:
             answer="a",
             source_doc_ids=[],
             sources=[],
+            confidence="high",
         )
         await client.upsert_answer_cache(cache)
 

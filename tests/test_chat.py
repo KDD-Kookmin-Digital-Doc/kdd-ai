@@ -22,6 +22,7 @@ from app.models.pipeline import (
 )
 from app.models.schemas import ChatRequest
 from app.api.chat import _run_pipeline, _save_answer_cache, _streaming_wrapper
+from app.streaming.sse import stream_sse_response
 
 
 # ── 헬퍼 ──
@@ -89,6 +90,7 @@ def _make_cache_match() -> CacheMatch:
         answer="캐시된 답변",
         similarity_score=0.97,
         sources=[{"doc_id": 1, "chunk_id": 1, "doc_name": "학사요람.pdf", "page": 45}],
+        confidence="high",
     )
 
 
@@ -328,7 +330,7 @@ class TestAnswerCacheCompleteness:
             source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="학사요람.pdf", page=10)],
         )
 
-        await _save_answer_cache(context, ["최대 ", "4년입니다."], bedrock, postgres)
+        await _save_answer_cache(context, ["최대 ", "4년입니다."], bedrock, postgres, _create_settings())
 
         postgres.upsert_answer_cache.assert_called_once()
         cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
@@ -356,7 +358,7 @@ class TestAnswerCacheCompleteness:
             source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
         )
 
-        await _save_answer_cache(context, [answer], bedrock, postgres)
+        await _save_answer_cache(context, [answer], bedrock, postgres, _create_settings())
 
         cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
         assert cache.question
@@ -381,7 +383,7 @@ class TestAnswerCacheCompleteness:
             embedded_question_input_type="search_query",
         )
 
-        await _save_answer_cache(context, ["답변"], bedrock, postgres)
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
 
         bedrock.embed_texts.assert_not_called()
         cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
@@ -402,7 +404,7 @@ class TestAnswerCacheCompleteness:
             embedded_question_input_type="search_document",  # ← 잘못 set된 케이스
         )
 
-        await _save_answer_cache(context, ["답변"], bedrock, postgres)
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
 
         bedrock.embed_texts.assert_called_once_with(
             ["휴학 기간은?"], input_type="search_query"
@@ -422,7 +424,7 @@ class TestAnswerCacheCompleteness:
         # question_embedding은 기본값 None
         assert context.question_embedding is None
 
-        await _save_answer_cache(context, ["답변"], bedrock, postgres)
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
 
         bedrock.embed_texts.assert_called_once_with(
             ["휴학 기간은?"], input_type="search_query"
@@ -442,11 +444,104 @@ class TestAnswerCacheCompleteness:
             embedded_question_text="다른 텍스트",  # mismatch
         )
 
-        await _save_answer_cache(context, ["답변"], bedrock, postgres)
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
 
         bedrock.embed_texts.assert_called_once_with(
             ["원본 질문"], input_type="search_query"
         )
+
+    async def test_save_includes_high_confidence(self):
+        """search_results 최고 유사도가 HIGH 임계값(0.9) 이상이면 'high' 박제.
+
+        SSE 시나리오 C(cache hit) 가 동일 박제값을 노출해 시나리오 A(cache miss)
+        와 UX 정합을 유지하기 위한 회귀 잠금.
+        """
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+
+        context = PipelineContext(
+            original_question="질문",
+            intent="academic",
+            search_results=[_make_search_result(similarity=0.95)],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+        )
+
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
+
+        cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
+        assert cache.confidence == "high"
+
+    async def test_save_includes_medium_confidence(self):
+        """MEDIUM(0.8) ≤ max < HIGH(0.9) 이면 'medium' 박제."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+
+        context = PipelineContext(
+            original_question="질문",
+            intent="academic",
+            search_results=[_make_search_result(similarity=0.85)],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+        )
+
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
+
+        cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
+        assert cache.confidence == "medium"
+
+    async def test_save_includes_low_confidence(self):
+        """max < MEDIUM(0.8) 이면 'low' 박제."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+
+        context = PipelineContext(
+            original_question="질문",
+            intent="academic",
+            search_results=[_make_search_result(similarity=0.5)],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+        )
+
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
+
+        cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
+        assert cache.confidence == "low"
+
+    async def test_persisted_confidence_equals_scenario_a_meta_confidence(self):
+        """박제 invariant — SSE 시나리오 A 가 노출한 meta.confidence ==
+        동일 답변의 _save_answer_cache 박제 confidence.
+
+        박제 방식의 핵심 약속(같은 답변은 cache miss/hit 무관하게 동일 신뢰도를
+        화면에 표시) 의 회귀 잠금. 미래에 ``context.search_results`` 변형 도입 /
+        두 호출 중 한쪽 인자 변경 시 이 단언이 즉시 fail.
+        """
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+
+        context = PipelineContext(
+            original_question="질문",
+            intent="academic",
+            search_results=[_make_search_result(similarity=0.85)],  # MEDIUM 범위
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+        )
+
+        async def _mock_token_stream(*args, **kwargs):
+            yield "답변"
+
+        # 1) SSE 시나리오 A meta.confidence 캡처
+        chunks: list[str] = []
+        with patch("app.streaming.sse.generate_response", side_effect=_mock_token_stream):
+            async for chunk in stream_sse_response(context, bedrock, settings):
+                chunks.append(chunk)
+        meta_event = json.loads(chunks[0].removeprefix("data: ").strip())
+        sse_confidence = meta_event["confidence"]
+
+        # 2) 동일 context 로 _save_answer_cache 박제 confidence 캡처
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, settings)
+        cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
+        persisted_confidence = cache.confidence
+
+        # 3) 동일성 단언 — 두 값 일치 + 의도된 값(medium) 추가 가드
+        assert sse_confidence == persisted_confidence == "medium"
 
 
 # ── Property 16: 잡담/Fallback 캐시 미저장 ──
@@ -607,7 +702,7 @@ class TestErrorPropagation:
         )
 
         # 예외가 발생하지 않아야 함
-        await _save_answer_cache(context, ["답변"], bedrock, postgres)
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
         # upsert_answer_cache가 호출되었지만 예외는 잡힘
         postgres.upsert_answer_cache.assert_called_once()
 
