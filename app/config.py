@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     BEDROCK_MAX_RETRIES: int = Field(default=2, ge=0)
     # FAQ 답변 초안 생성 시 동시 LLM 호출 수 (Bedrock throttling 가드)
     FAQ_CONCURRENCY: int = Field(default=5, gt=0)
+    # FAQ 카테고리 분류 (B1) — 9개 enum 중 1단어 응답이라 INTENT_MAX_TOKENS(16) 보다 작게.
+    CATEGORY_MAX_TOKENS: int = Field(default=8, gt=0)
 
     # confidence 임계값
     CONFIDENCE_HIGH_THRESHOLD: float = 0.9

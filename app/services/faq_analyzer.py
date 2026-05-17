@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Literal, cast
 
 import hdbscan
 import numpy as np
@@ -15,6 +16,32 @@ from app.config import Settings
 from app.models.pipeline import PipelineContext
 
 logger = logging.getLogger(__name__)
+
+# B1: FAQ 카테고리 분류 (BE 요청, 2026-05-15). service-local enum — AI 서버는 분류만,
+# BE 가 enum 가지면 됨 (config.py 노출 X). Literal 은 PEP 586 상 string 반복이 필요해
+# tuple 과 별도 정의.
+FAQ_CATEGORIES: tuple[str, ...] = (
+    "academic",
+    "graduation",
+    "enrollment_status",
+    "scholarship",
+    "registration",
+    "curriculum",
+    "career",
+    "event",
+    "other",
+)
+FaqCategory = Literal[
+    "academic",
+    "graduation",
+    "enrollment_status",
+    "scholarship",
+    "registration",
+    "curriculum",
+    "career",
+    "event",
+    "other",
+]
 
 
 class InsufficientDataError(Exception):
@@ -91,7 +118,9 @@ async def analyze_faq(
     clusters.sort(key=lambda c: c["frequency"], reverse=True)
     top_clusters = clusters[:top_k]
 
-    # 5. 대표 질문별 답변 초안 생성 (병렬 + Semaphore burst 가드)
+    # 5. 대표 질문별 답변 초안 + 카테고리 분류 (병렬 + Semaphore burst 가드).
+    # 답변(Sonnet) + 카테고리(Haiku) 가 같은 semaphore 를 공유해 동시 Bedrock
+    # 호출 ≤ FAQ_CONCURRENCY. Haiku 가 더 빨라 자연스럽게 인터리브 동작.
     semaphore = asyncio.Semaphore(settings.FAQ_CONCURRENCY)
 
     async def _bounded_draft(cluster: dict) -> str:
@@ -104,29 +133,55 @@ async def analyze_faq(
                 settings=settings,
             )
 
-    results = await asyncio.gather(
-        *(_bounded_draft(c) for c in top_clusters),
-        return_exceptions=True,
+    async def _bounded_classify(cluster: dict) -> FaqCategory:
+        async with semaphore:
+            return await _classify_category(
+                question=cluster["representative_question"],
+                bedrock=bedrock,
+                settings=settings,
+            )
+
+    draft_results, category_results = await asyncio.gather(
+        asyncio.gather(*(_bounded_draft(c) for c in top_clusters), return_exceptions=True),
+        asyncio.gather(*(_bounded_classify(c) for c in top_clusters), return_exceptions=True),
     )
 
     candidates: list[dict] = []
-    for cluster, result in zip(top_clusters, results, strict=True):
-        if isinstance(result, BaseException):
+    for cluster, draft_result, category_result in zip(
+        top_clusters, draft_results, category_results, strict=True
+    ):
+        # 답변 초안 결과 처리
+        if isinstance(draft_result, BaseException):
             # gather(return_exceptions=True) 는 inner CancelledError 도 결과로 wrap.
             # caller 일관성을 위해 cancel 은 재전파 (응답 자체가 폐기됨).
-            if isinstance(result, asyncio.CancelledError):
-                raise result
+            if isinstance(draft_result, asyncio.CancelledError):
+                raise draft_result
             logger.warning(
                 "FAQ 답변 초안 생성 실패 (질문: %r): %s",
                 cluster["representative_question"],
-                result,
+                draft_result,
             )
-            draft_answer = f"답변 초안 생성 실패: {type(result).__name__}"
+            draft_answer = f"답변 초안 생성 실패: {type(draft_result).__name__}"
         else:
-            draft_answer = result
+            draft_answer = draft_result
+
+        # 카테고리 분류 결과 처리 — 분류 실패는 답변과 격리(B1 옵션 A): 'other' placeholder.
+        if isinstance(category_result, BaseException):
+            if isinstance(category_result, asyncio.CancelledError):
+                raise category_result
+            logger.warning(
+                "FAQ 카테고리 분류 실패 (질문: %r) — 'other' 폴백: %s",
+                cluster["representative_question"],
+                category_result,
+            )
+            category: FaqCategory = "other"
+        else:
+            category = category_result
+
         candidates.append({
             "question": cluster["representative_question"],
             "draft_answer": draft_answer,
+            "category": category,
             "frequency": cluster["frequency"],
         })
 
@@ -182,3 +237,46 @@ async def _generate_draft_answer(
     )
 
     return answer.strip()
+
+
+async def _classify_category(
+    question: str,
+    bedrock: BedrockClient,
+    settings: Settings,
+) -> FaqCategory:
+    """대표 질문을 9개 카테고리 enum 중 하나로 분류 (Haiku, 1단어 응답)."""
+    system_prompt = (
+        "다음 학사 관련 질문을 아래 9개 카테고리 중 하나로 분류하세요.\n"
+        "응답은 카테고리 값(영문 소문자) 하나만 반환하고 다른 텍스트는 쓰지 마세요.\n\n"
+        "카테고리:\n"
+        "- academic: 학사 전반\n"
+        "- graduation: 졸업\n"
+        "- enrollment_status: 휴학·복학·자퇴\n"
+        "- scholarship: 장학\n"
+        "- registration: 등록·학적\n"
+        "- curriculum: 전공·교과\n"
+        "- career: 취업·현장실습\n"
+        "- event: 행사·특강\n"
+        "- other: 기타 / 분류 불가"
+    )
+    messages = [{"role": "user", "content": [{"text": f"질문: {question}\n응답:"}]}]
+
+    response, _ = await bedrock.invoke_llm(
+        system_prompt=system_prompt,
+        messages=messages,
+        max_tokens=settings.CATEGORY_MAX_TOKENS,
+        model="light",
+    )
+    return _parse_category(response)
+
+
+def _parse_category(response: str) -> FaqCategory:
+    """LLM 응답을 9개 enum 중 하나로 정규화. 매칭 실패 시 'other' fallback + warning."""
+    cleaned = response.strip().lower()
+    if cleaned in FAQ_CATEGORIES:
+        return cast(FaqCategory, cleaned)
+    logger.warning(
+        "FAQ 카테고리 분류 응답이 유효하지 않음 (%r) — 'other' 폴백",
+        response,
+    )
+    return "other"
