@@ -136,6 +136,47 @@ class TestUserContextInPrompt:
         assert "학번" in system_prompt
         assert "본인의 학번에 해당하는 규정" in system_prompt
 
+    async def test_academic_prompt_blocks_user_specific_assertion(self):
+        """id=10 사고 후속: 2인칭/호칭 + 학번 단정 표현 금지 가드 회귀 잠금.
+
+        "당신은 X학번 이전/이후", "본인은 X학번" 같은 단정 표현을 LLM 이 답변
+        본문에 끼워넣지 못하도록 system prompt 에 명시 금지 + 권장 예시 1쌍이
+        포함되는지 검증.
+        """
+        settings = _create_settings()
+        ctx = _make_context(
+            user_context="소프트웨어학부 3학년 재학",
+            search_results=[_make_search_result()],
+        )
+
+        system_prompt, _ = build_academic_messages(ctx, settings)
+
+        assert "당신은 X학번" in system_prompt
+        assert "본인은 X학번" in system_prompt
+        assert "절대 쓰지 마세요" in system_prompt
+        # ❌/✅ few-shot 1쌍
+        assert "금지:" in system_prompt
+        assert "권장:" in system_prompt
+
+    async def test_academic_prompt_blocks_inference_of_missing_attributes(self):
+        """id=10 사고 핵심 원인 처방: user_context 에 없는 속성 추론·단정 금지.
+
+        BE 가 user_context 에 학번을 안 보내는데 LLM 이 학년 정보로 학번을
+        환각 추론하는 케이스를 system prompt 가드로 자발 준수 억제 — 가드
+        키워드 회귀 잠금. BE 측 admissionYear 포함 PR 머지 시 본 가드 발동
+        빈도가 감소해야 함 (별도 운영 모니터링).
+        """
+        settings = _create_settings()
+        ctx = _make_context(
+            user_context="소프트웨어학부 3학년 재학",
+            search_results=[_make_search_result()],
+        )
+
+        system_prompt, _ = build_academic_messages(ctx, settings)
+
+        assert "명시되지 않은 속성" in system_prompt
+        assert "추론하거나 단정" in system_prompt
+
     @hyp_settings(max_examples=50)
     @given(
         user_context=st.text(min_size=1, max_size=100).filter(lambda x: x.strip()),
