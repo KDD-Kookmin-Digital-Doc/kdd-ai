@@ -38,9 +38,13 @@ def _create_settings() -> Settings:
 
 def _create_bedrock() -> AsyncMock:
     bedrock = AsyncMock()
-    # Batch 임베딩 — semantic_cache 가 [cache_key, question] 2개를 한 호출에 처리.
-    # _save_answer_cache 단건 호출도 [0] 만 사용하므로 1개짜리 케이스와 호환.
-    bedrock.embed_texts.return_value = [[0.1] * 1024, [0.2] * 1024]
+
+    # 입력 길이에 맞춰 임베딩 반환 — semantic_cache batch [cache_key, q] 와
+    # _save_answer_cache 단건 호출 양쪽 호환. off-by-one buggy mock 회피.
+    def _embed(texts, **kwargs):
+        return [[0.1 + 0.01 * i] * 1024 for i in range(len(texts))]
+
+    bedrock.embed_texts.side_effect = _embed
     bedrock.invoke_llm.return_value = (
         "academic",
         TokenUsage(prompt_tokens=10, completion_tokens=3, total_tokens=13),

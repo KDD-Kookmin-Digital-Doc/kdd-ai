@@ -36,8 +36,14 @@ def _create_settings(**overrides: str) -> Settings:
 
 def _create_bedrock() -> AsyncMock:
     bedrock = AsyncMock()
-    # Batch 임베딩 — semantic_cache 가 [cache_key, question] 2개를 한 호출에 처리.
-    bedrock.embed_texts.return_value = [[0.1] * 1024, [0.2] * 1024]
+
+    # 입력 길이에 맞춰 임베딩 반환 — off-by-one 잡힘 (단건 호출에 2개 받는 buggy
+    # mock 회피). PR #62/#64 의 격리 패턴과 일관. input_type 검증은 별도
+    # 전용 테스트가 책임 (mock 안에 박으면 먼 곳에서 혼란스러운 실패 유발).
+    def _embed(texts, **kwargs):
+        return [[0.1 + 0.01 * i] * 1024 for i in range(len(texts))]
+
+    bedrock.embed_texts.side_effect = _embed
     return bedrock
 
 
@@ -331,7 +337,7 @@ class TestEmbeddingCaching:
         """
         cache_key_emb = [0.11] * 1024
         question_emb = [0.42] * 1024
-        mock_bedrock.embed_texts.return_value = [cache_key_emb, question_emb]
+        mock_bedrock.embed_texts.side_effect = lambda texts, **k: [cache_key_emb, question_emb]
         mock_postgres.search_answer_cache.return_value = None
 
         ctx = _make_context("질문")
@@ -346,7 +352,7 @@ class TestEmbeddingCaching:
         """캐시 히트 시에도 동일하게 보관 (일관성)."""
         cache_key_emb = [0.11] * 1024
         question_emb = [0.42] * 1024
-        mock_bedrock.embed_texts.return_value = [cache_key_emb, question_emb]
+        mock_bedrock.embed_texts.side_effect = lambda texts, **k: [cache_key_emb, question_emb]
         mock_postgres.search_answer_cache.return_value = _make_cache_match()
 
         ctx = _make_context("질문")
@@ -402,7 +408,7 @@ class TestEmbeddingCaching:
         """
         cache_key_emb = [0.11] * 1024
         question_emb = [0.42] * 1024
-        mock_bedrock.embed_texts.return_value = [cache_key_emb, question_emb]
+        mock_bedrock.embed_texts.side_effect = lambda texts, **k: [cache_key_emb, question_emb]
         mock_postgres.search_answer_cache.side_effect = RuntimeError("DB 실패")
 
         ctx = _make_context("질문")
@@ -555,3 +561,31 @@ class TestFetchSimilarQuestionsForUser:
         call = postgres.search_similar_questions.call_args
         assert call.kwargs["top_k"] == 6
         assert call.kwargs["threshold"] == 0.5
+
+
+# ── CACHE_EMBED_INPUT_TYPE 상수 단일화 검증 ──
+
+
+class TestCacheEmbedInputType:
+    """check_cache / _save_answer_cache 양쪽이 동일한 input_type 사용 보장.
+
+    Task 16 의 (text, input_type) 가드 필드를 두는 대신 모듈 상수 단일화로
+    invariant 가 구조적으로 성립함을 잠근다 (외부 리뷰 7.4).
+    """
+
+    def test_cache_embed_input_type_is_search_query(self):
+        """상수 값 회귀 잠금 — 변경 시 caller 모두 동기 인지 강제."""
+        assert CACHE_EMBED_INPUT_TYPE == "search_query"
+
+    async def test_check_cache_uses_constant_for_input_type(
+        self, mock_settings, mock_bedrock, mock_postgres
+    ):
+        """check_cache 가 CACHE_EMBED_INPUT_TYPE 상수를 input_type 으로 전달."""
+        mock_postgres.search_answer_cache.return_value = None
+
+        ctx = _make_context("질문")
+        ctx.user_context = "테스트 컨텍스트"
+        await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
+
+        call = mock_bedrock.embed_texts.call_args
+        assert call.kwargs["input_type"] == CACHE_EMBED_INPUT_TYPE
