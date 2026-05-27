@@ -12,6 +12,21 @@ from app.models.pipeline import PipelineContext, SourceDoc
 logger = logging.getLogger(__name__)
 
 
+def _build_cache_key(user_context: str, question: str) -> str:
+    """캐시 키 텍스트를 빌드한다.
+
+    user_context 를 prefix 로 포함시켜 같은 user_context 사용자들끼리만 캐시를
+    공유하도록 분리한다. 다른 학과/학년/학적상태 사용자에게 환각 답변이
+    cross-누설되는 사고 (id=10 케이스) 를 임베딩 키 공간 분리로 구조적으로 차단.
+
+    user_context 가 비어있으면 question 만 반환 — BE 폴백 경로 (프로필 미등록
+    사용자에게 이름만 보내는 케이스) 호환.
+    """
+    if not user_context:
+        return question
+    return f"[사용자] {user_context}\n[질문] {question}"
+
+
 async def check_cache(
     context: PipelineContext,
     is_first_message: bool,
@@ -31,26 +46,38 @@ async def check_cache(
         return context
 
     try:
-        embeddings = await bedrock.embed_texts(
-            [context.original_question], input_type="search_query"
+        cache_key_text = _build_cache_key(
+            context.user_context, context.original_question
         )
-        question_embedding = embeddings[0]
 
-        # Task 16: 임베딩 재사용을 위해 컨텍스트에 보관 (cache hit/miss 무관).
-        # vector_search / _save_answer_cache 가 텍스트 + input_type 일치 시 재사용.
+        # Batch 임베딩 — 캐시 키 + 검색 키 한 호출에 처리. cache miss 시
+        # vector_search 가 question_embedding 을 재사용해 Task 16 효과 유지.
+        # cache hit 시 question_embedding 은 사용되지 않으나 batch 비용이
+        # 단건과 거의 동일해 분기 복잡도 회피가 더 가치 있다고 판단.
+        embeddings = await bedrock.embed_texts(
+            [cache_key_text, context.original_question],
+            input_type="search_query",
+        )
+        cache_key_embedding, question_embedding = embeddings[0], embeddings[1]
+
+        # 캐시 키 임베딩 보관 (_save_answer_cache 가 read-only 재사용)
+        context.cache_key_embedding = cache_key_embedding
+
+        # 검색 키 임베딩 + Task 16 메타 (vector_search 가 재사용)
         # input_type 도 함께 저장해 미래에 cache 측 input_type 이 바뀌어도
         # 하위 단계가 silent 하게 잘못 재사용하지 않도록 가드.
         context.question_embedding = question_embedding
         context.embedded_question_text = context.original_question
         context.embedded_question_input_type = "search_query"
         logger.debug(
-            "질문 임베딩 컨텍스트 보관: text=%r, input_type=%s",
+            "질문 임베딩 컨텍스트 보관: text=%r, input_type=%s, cache_key_has_prefix=%s",
             context.original_question,
             "search_query",
+            bool(context.user_context),
         )
 
         cache_match = await postgres.search_answer_cache(
-            embedding=question_embedding,
+            embedding=cache_key_embedding,
             threshold=settings.CACHE_SIMILARITY_THRESHOLD,
         )
 
