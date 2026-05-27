@@ -8,6 +8,7 @@ from app.clients.bedrock import BedrockClient
 from app.clients.postgres_client import PostgresVectorClient
 from app.config import Settings
 from app.models.pipeline import PipelineContext, SearchResult, SourceDoc
+from app.pipeline.semantic_cache import fetch_similar_questions_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +78,22 @@ async def search_documents(
             results[0].similarity_score,
         )
     else:
-        suggested = await postgres.search_similar_questions(
-            embedding=question_embedding,
+        # fetch+extract 단일함수 — answer_cache.question 컬럼의 cohort prefix
+        # 텍스트에서 원문만 복원 + 같은 원문 cohort 별 중복 제거 + over-fetch.
+        # 사용자 화면에 prefix 노출 차단 + 동일 추천 중복 차단.
+        #
+        # N1 (외부 리뷰 3차) — answer_cache.embedding 컬럼은 cache_key_embedding
+        # (cohort prefix 포함) 으로 저장되므로 검색 키도 같은 키 공간을 사용해야
+        # cosine 거리가 정합. 같은 cohort 의 비슷한 질문이 우선 추천된다.
+        # cache_key_embedding 이 None 인 경로 (멀티턴 academic 등 semantic_cache
+        # skip) 에서는 question_embedding 으로 graceful degrade — 거리 정합성
+        # 미세 저하 수용. fallback 자체 발동 빈도가 매우 낮은 데다 (documents
+        # 검색 0.3 이상 매치 0건 케이스), 추천 0건 위험은 운영 env 의
+        # FALLBACK_SIMILARITY_THRESHOLD 하향으로 흡수.
+        fallback_embedding = context.cache_key_embedding or question_embedding
+        suggested = await fetch_similar_questions_for_user(
+            postgres=postgres,
+            embedding=fallback_embedding,
             top_k=settings.FALLBACK_SUGGESTED_COUNT,
             threshold=settings.FALLBACK_SIMILARITY_THRESHOLD,
         )

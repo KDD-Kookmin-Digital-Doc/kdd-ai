@@ -101,6 +101,17 @@ class PipelineContext:
       ``semantic_cache`` 의 input_type을 변경했을 때 silent quality
       degradation을 막는 안전장치이다.
     - 하위 단계는 세 필드를 **읽기만** 한다(덮어쓰지 않는다).
+
+    캐시 키 임베딩 contract:
+    - ``cache_key_embedding`` 은 ``_build_cache_key(user_context, original_question)``
+      결과를 input_type="search_query" 로 임베딩한 결과이다.
+    - ``semantic_cache.check_cache`` 가 set 하고 ``_save_answer_cache`` 가
+      read-only 재사용한다. background task 는 context read-only 가정 —
+      ``user_context``/``original_question`` 도 불변.
+    - 검색용 ``question_embedding`` 처럼 (text, input_type) 가드 필드를 두지
+      않는다. set 위치와 재사용 위치의 입력이 결정적으로 동일하기 때문 —
+      미래에 누군가 가드 필드를 미러링하려고 시도하면 작업 원칙 #12 의
+      future-proofing slop 룰을 적용해 차단한다.
     """
 
     original_question: str
@@ -122,4 +133,8 @@ class PipelineContext:
     question_embedding: list[float] | None = None
     embedded_question_text: str | None = None
     embedded_question_input_type: str | None = None
+    # 캐시 키 임베딩 — user_context prefix 포함 텍스트의 임베딩.
+    # 다른 user_context 사용자에게 cross-누설을 키 공간 분리로 차단.
+    # 자세한 contract 는 클래스 docstring 참조.
+    cache_key_embedding: list[float] | None = None
     session_id: str = ""  # PR-50: 세션 단위 트레이싱. 미래 메트릭/DB 저장에도 사용 가능.

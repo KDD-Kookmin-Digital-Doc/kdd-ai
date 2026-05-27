@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -37,7 +38,13 @@ def _create_settings() -> Settings:
 
 def _create_bedrock() -> AsyncMock:
     bedrock = AsyncMock()
-    bedrock.embed_texts.return_value = [[0.1] * 1024]
+
+    # 입력 길이에 맞춰 임베딩 반환 — semantic_cache batch [cache_key, q] 와
+    # _save_answer_cache 단건 호출 양쪽 호환. off-by-one buggy mock 회피.
+    def _embed(texts, **kwargs):
+        return [[0.1 + 0.01 * i] * 1024 for i in range(len(texts))]
+
+    bedrock.embed_texts.side_effect = _embed
     bedrock.invoke_llm.return_value = (
         "academic",
         TokenUsage(prompt_tokens=10, completion_tokens=3, total_tokens=13),
@@ -367,8 +374,12 @@ class TestAnswerCacheCompleteness:
         assert cache.source_doc_ids
         assert cache.sources
 
-    async def test_save_reuses_cached_embedding(self):
-        """semantic_cache가 보관한 임베딩을 재사용 (Task 16) — embed_texts 호출 X."""
+    async def test_save_reuses_cache_key_embedding(self):
+        """semantic_cache 가 보관한 cache_key_embedding 을 재사용 — embed_texts 호출 X.
+
+        Task 16 후속 — 재사용 키가 검색용 question_embedding 에서 캐시 키
+        cache_key_embedding 으로 변경됨 (cross-user_context 누설 차단 도입).
+        """
         bedrock = _create_bedrock()
         postgres = _create_postgres()
 
@@ -378,9 +389,7 @@ class TestAnswerCacheCompleteness:
             intent="academic",
             search_results=[_make_search_result(doc_id=1)],
             source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="학사요람.pdf", page=10)],
-            question_embedding=cached_embedding,
-            embedded_question_text="휴학 기간은?",
-            embedded_question_input_type="search_query",
+            cache_key_embedding=cached_embedding,
         )
 
         await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
@@ -389,66 +398,178 @@ class TestAnswerCacheCompleteness:
         cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
         assert cache.embedding == cached_embedding
 
-    async def test_save_creates_new_embedding_when_input_type_mismatch(self):
-        """input_type 이 search_query 가 아니면 새로 호출 (silent degradation 가드)."""
+    async def test_save_creates_new_cache_key_embedding_when_none(self):
+        """context.cache_key_embedding 이 None 이면 _build_cache_key 결과로 새로 임베딩.
+
+        멀티턴 academic 시나리오처럼 semantic_cache 단계가 skip 된 경로에서
+        _save_answer_cache 가 cache 키를 직접 구성해야 한다.
+        """
         bedrock = _create_bedrock()
         postgres = _create_postgres()
 
         context = PipelineContext(
             original_question="휴학 기간은?",
-            intent="academic",
-            search_results=[_make_search_result(doc_id=1)],
-            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
-            question_embedding=[0.42] * 1024,
-            embedded_question_text="휴학 기간은?",
-            embedded_question_input_type="search_document",  # ← 잘못 set된 케이스
-        )
-
-        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
-
-        bedrock.embed_texts.assert_called_once_with(
-            ["휴학 기간은?"], input_type="search_query"
-        )
-
-    async def test_save_creates_new_embedding_when_no_cache(self):
-        """context.question_embedding이 None이면 새로 임베딩 (예: cache 단계가 실패한 케이스)."""
-        bedrock = _create_bedrock()
-        postgres = _create_postgres()
-
-        context = PipelineContext(
-            original_question="휴학 기간은?",
+            user_context="소프트웨어학부 3학년 재학",
             intent="academic",
             search_results=[_make_search_result(doc_id=1)],
             source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="학사요람.pdf", page=10)],
         )
-        # question_embedding은 기본값 None
-        assert context.question_embedding is None
+        assert context.cache_key_embedding is None
 
         await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
 
-        bedrock.embed_texts.assert_called_once_with(
-            ["휴학 기간은?"], input_type="search_query"
-        )
+        # _build_cache_key 결과 = "[사용자] 소프트웨어학부 3학년 재학\n[질문] 휴학 기간은?"
+        bedrock.embed_texts.assert_called_once()
+        call = bedrock.embed_texts.call_args
+        texts = call.args[0]
+        assert len(texts) == 1
+        assert "[사용자]" in texts[0]
+        assert "소프트웨어학부 3학년 재학" in texts[0]
+        assert "휴학 기간은?" in texts[0]
+        assert call.kwargs["input_type"] == "search_query"
 
-    async def test_save_creates_new_embedding_when_text_mismatch(self):
-        """embedded_question_text가 original_question과 다르면 새로 임베딩 (방어)."""
+    async def test_save_uses_cache_key_text_in_question_column(self):
+        """answer_cache.question 컬럼에 _build_cache_key 결과가 박혀 dedup 키 분리.
+
+        RPC upsert_answer_cache 의 DELETE WHERE question = ... dedup 키 + 락 키
+        둘 다 cohort 별로 갈라져 cross-cohort thrash 차단 + 락 경합 해결
+        (외부 리뷰 B1 a/b 처리).
+        """
         bedrock = _create_bedrock()
         postgres = _create_postgres()
-
         context = PipelineContext(
-            original_question="원본 질문",
+            original_question="휴학 기간은?",
+            user_context="소프트웨어학부 3학년 재학",
             intent="academic",
             search_results=[_make_search_result(doc_id=1)],
-            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
-            question_embedding=[0.42] * 1024,
-            embedded_question_text="다른 텍스트",  # mismatch
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=10)],
+            cache_key_embedding=[0.42] * 1024,
         )
 
         await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
 
-        bedrock.embed_texts.assert_called_once_with(
-            ["원본 질문"], input_type="search_query"
+        cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
+        assert "[사용자] 소프트웨어학부 3학년 재학" in cache.question
+        assert "[질문] 휴학 기간은?" in cache.question
+
+    async def test_save_with_empty_user_context_uses_original_question(self):
+        """user_context 가 비어있으면 cache.question 에 원문 그대로 (BE 폴백 호환).
+
+        _build_cache_key contract — user_context 빈 경우 question 만 반환.
+        """
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="휴학 기간은?",
+            user_context="",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=10)],
+            cache_key_embedding=[0.42] * 1024,
         )
+
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
+
+        cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
+        assert cache.question == "휴학 기간은?"
+        assert "[사용자]" not in cache.question
+
+    # ── 오염 답변 WRITE 게이트 (Layer 2 / 외부 리뷰 A3) ──
+
+    async def test_save_rejects_polluted_answer_id10_case(self):
+        """id=10 사고 원문 그대로 → 캐시 저장 거부 (upsert RPC 호출 X).
+
+        LLM Layer 1 자발 준수 실패해도 환각 답변이 캐시에 박히는 경로 차단.
+        """
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="2025년도 졸업요건에 자격증 따야해?",
+            user_context="소프트웨어학부 3학년 재학",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+        polluted = [
+            "2025학번 이후 입학생부터는 K*코딩역량인증이 필요합니다. ",
+            "참고로 당신은 2025학번 이전 학생이므로 해당되지 않습니다.",
+        ]
+
+        await _save_answer_cache(context, polluted, bedrock, postgres, _create_settings())
+
+        postgres.upsert_answer_cache.assert_not_called()
+
+    async def test_save_accepts_clean_answer(self):
+        """정상 답변 → 정상 캐시 저장 (false positive 방지)."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="휴학 신청 방법은?",
+            user_context="소프트웨어학부 3학년 재학",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+        clean = [
+            "휴학은 신청서를 제출하면 됩니다. 본인의 학번에 해당하는 규정을 확인하세요.",
+        ]
+
+        await _save_answer_cache(context, clean, bedrock, postgres, _create_settings())
+
+        postgres.upsert_answer_cache.assert_called_once()
+
+    async def test_save_accepts_objective_year_mention(self):
+        """객관 진술 ("2025학번 이후 입학생부터는") → 캐시 저장 허용 (false positive 방지).
+
+        가드 정규식은 (호칭 + 학번) 또는 (학번 + 이전/이후 + 단정 종결어미) 만 매치 —
+        객관 진술 키워드 ("이후 입학생", "이전에 입학") 와 분리.
+        """
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="K*코딩역량 누가 따야해?",
+            user_context="컴공 3학년 재학",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+        objective = [
+            "K*코딩역량인증은 2025학번 이후 입학생에게 적용됩니다. ",
+            "본인의 학번 기준 적용 여부를 확인하세요.",
+        ]
+
+        await _save_answer_cache(context, objective, bedrock, postgres, _create_settings())
+
+        postgres.upsert_answer_cache.assert_called_once()
+
+    async def test_save_logs_warning_on_polluted_answer(self, caplog):
+        """게이트 발동 시 WARNING 로그 박힘 (CloudWatch 모니터링 호환).
+
+        log prefix "캐시 저장 skip — 오염 답변" 으로 Layer 1 자발 준수 실패율
+        측정 가능 (m1 자동 누적).
+        """
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="질문",
+            user_context="컴공 3학년 재학",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+        polluted = ["당신은 2025학번 이전 학생이므로 면제됩니다."]
+
+        with caplog.at_level(logging.WARNING):
+            await _save_answer_cache(
+                context, polluted, bedrock, postgres, _create_settings()
+            )
+
+        assert "캐시 저장 skip — 오염 답변 패턴 감지" in caplog.text
+        postgres.upsert_answer_cache.assert_not_called()
 
     async def test_save_includes_high_confidence(self):
         """search_results 최고 유사도가 HIGH 임계값(0.9) 이상이면 'high' 박제.

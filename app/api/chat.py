@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, Request
@@ -19,11 +20,26 @@ from app.models.pipeline import AnswerCache, PipelineContext
 from app.models.schemas import ChatRequest, ErrorResponse
 from app.pipeline.intent_router import classify_intent
 from app.pipeline.query_rewriter import rewrite_query
-from app.pipeline.semantic_cache import check_cache
+from app.pipeline.semantic_cache import (
+    CACHE_EMBED_INPUT_TYPE,
+    _build_cache_key,
+    check_cache,
+)
 from app.pipeline.vector_search import search_documents
 from app.streaming.sse import determine_confidence, stream_sse_response
 
 logger = logging.getLogger(__name__)
+
+# 오염 답변 캐시 WRITE 게이트 — LLM 환각 패턴 ("당신은 X학번 이전 학생" 등) 이
+# 답변 본문에 박힌 경우 캐시 저장을 거부. id=10 사고 후속 처방의 Layer 2
+# (Layer 1: 시스템 프롬프트 가드 / Layer 2: 본 정규식 게이트 / Layer 3: dedup
+# 키 cohort 분리). SSE 송출엔 영향 없고 캐시 저장만 skip — 다음 사용자가
+# 환각 답변에 cache hit 받는 경로 자체 차단.
+_POLLUTED_ANSWER_PATTERN = re.compile(
+    r"당신은\s*\d{2,4}학번"
+    r"|본인은\s*\d{2,4}학번"
+    r"|\d{2,4}학번\s*(?:이전|이후)\s*(?:이신|이며|학생이|이라|이므로|이라면|이시면)"
+)
 
 _pending_cache_writes: set[asyncio.Task] = set()
 
@@ -150,23 +166,40 @@ async def _save_answer_cache(
     """
     try:
         full_answer = "".join(answer_parts)
-        # Task 16: semantic_cache가 original_question을 search_query로 임베딩한 결과를 재사용.
-        # vector_search가 rewrite 분기에서 새 임베딩을 만들어도 context.question_embedding은
-        # 갱신되지 않으므로 여기서도 original 측 임베딩이 안전하게 유지됨.
-        # input_type 까지 비교해 미래에 cache 측 input_type 이 바뀌면 자동으로 새로 호출.
-        if (
-            context.question_embedding is not None
-            and context.embedded_question_text == context.original_question
-            and context.embedded_question_input_type == "search_query"
-        ):
-            question_embedding = context.question_embedding
-            logger.debug("_save_answer_cache 임베딩 재사용")
+
+        # 오염 답변 WRITE 게이트 (Layer 2) — LLM 자발 준수 (Layer 1 시스템
+        # 프롬프트 가드) 실패 시 환각 답변이 캐시에 박히는 것 자체 차단.
+        # SSE 송출은 이미 완료 (본 사용자엔 영향 0), 캐시 저장만 skip → 다음
+        # 사용자가 cache hit 으로 leak 받는 경로 차단. same-cohort cross-share
+        # 도 함께 닫음 (dedup 키 분리 [Layer 3] 가 못 닫는 갭).
+        # 로그 prefix "캐시 저장 skip — 오염 답변" 으로 CloudWatch 모니터링 호환.
+        if _POLLUTED_ANSWER_PATTERN.search(full_answer):
+            logger.warning(
+                "캐시 저장 skip — 오염 답변 패턴 감지: question=%r, answer_preview=%r",
+                context.original_question,
+                full_answer[:120],
+            )
+            return
+
+        # cache_key_text 는 dedup/lock 키 (answer_cache.question 컬럼) + 임베딩
+        # 원문 양쪽에 사용. semantic_cache 와 동일한 _build_cache_key 호출.
+        cache_key_text = _build_cache_key(
+            context.user_context, context.original_question
+        )
+
+        # cache_key_embedding 재사용 — semantic_cache.check_cache 가 보관한 값.
+        # None 이면 semantic_cache 단계가 skip 된 경로 (멀티턴 academic 등) →
+        # cache_key_text 로 새로 임베딩한다. input_type 은 CACHE_EMBED_INPUT_TYPE
+        # 상수로 search 측과 일원화 — silent quality degradation 위험 0.
+        if context.cache_key_embedding is not None:
+            cache_key_embedding = context.cache_key_embedding
+            logger.debug("_save_answer_cache 캐시 키 임베딩 재사용")
         else:
             embeddings = await bedrock.embed_texts(
-                [context.original_question], input_type="search_query"
+                [cache_key_text], input_type=CACHE_EMBED_INPUT_TYPE
             )
-            question_embedding = embeddings[0]
-            logger.debug("_save_answer_cache 임베딩 신규 호출")
+            cache_key_embedding = embeddings[0]
+            logger.debug("_save_answer_cache 캐시 키 임베딩 신규 호출")
 
         source_doc_ids = list({r.doc_id for r in (context.search_results or [])})
         sources = [
@@ -177,9 +210,13 @@ async def _save_answer_cache(
         # 동일 값을 노출해 cache miss(시나리오 A)와 UX 정합 유지.
         confidence = determine_confidence(context.search_results, settings)
 
+        # answer_cache.question 컬럼에 cache_key_text (prefix 포함) 저장 — RPC
+        # 의 DELETE WHERE question = ... dedup 키 + pg_advisory_xact_lock 락 키가
+        # cohort 별로 갈라져 cross-cohort thrash + 락 경합 해결 (id=10 사고 후속).
+        # 사용자 노출용 변환은 fetch_similar_questions_for_user 가 책임.
         cache = AnswerCache(
-            question=context.original_question,
-            embedding=question_embedding,
+            question=cache_key_text,
+            embedding=cache_key_embedding,
             answer=full_answer,
             source_doc_ids=source_doc_ids,
             sources=sources,

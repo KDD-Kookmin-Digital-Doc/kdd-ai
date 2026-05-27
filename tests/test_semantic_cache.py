@@ -12,7 +12,13 @@ from hypothesis import strategies as st
 
 from app.config import Settings
 from app.models.pipeline import CacheMatch, PipelineContext, SourceDoc, TokenUsage
-from app.pipeline.semantic_cache import check_cache
+from app.pipeline.semantic_cache import (
+    CACHE_EMBED_INPUT_TYPE,
+    _build_cache_key,
+    _extract_question_from_cache_key,
+    check_cache,
+    fetch_similar_questions_for_user,
+)
 
 
 # ── 헬퍼: 속성 테스트와 fixture 모두에서 사용 ──
@@ -30,7 +36,14 @@ def _create_settings(**overrides: str) -> Settings:
 
 def _create_bedrock() -> AsyncMock:
     bedrock = AsyncMock()
-    bedrock.embed_texts.return_value = [[0.1] * 1024]
+
+    # 입력 길이에 맞춰 임베딩 반환 — off-by-one 잡힘 (단건 호출에 2개 받는 buggy
+    # mock 회피). PR #62/#64 의 격리 패턴과 일관. input_type 검증은 별도
+    # 전용 테스트가 책임 (mock 안에 박으면 먼 곳에서 혼란스러운 실패 유발).
+    def _embed(texts, **kwargs):
+        return [[0.1 + 0.01 * i] * 1024 for i in range(len(texts))]
+
+    bedrock.embed_texts.side_effect = _embed
     return bedrock
 
 
@@ -234,14 +247,19 @@ class TestCheckCacheUnit:
     async def test_embed_texts_called_with_search_query(
         self, mock_settings, mock_bedrock, mock_postgres
     ):
-        """임베딩 호출 시 input_type이 search_query인지 확인."""
+        """임베딩 호출 시 input_type이 search_query인지 확인.
+
+        Batch 입력은 [cache_key, original_question]. user_context 가 비어있는
+        ``_make_context`` 기본 케이스에서는 _build_cache_key 가 question 만
+        반환하므로 두 입력이 같다.
+        """
         mock_postgres.search_answer_cache.return_value = None
 
         ctx = _make_context("질문")
         await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
         mock_bedrock.embed_texts.assert_called_once_with(
-            ["질문"], input_type="search_query"
+            ["질문", "질문"], input_type="search_query"
         )
 
     async def test_threshold_from_settings(
@@ -313,30 +331,35 @@ class TestEmbeddingCaching:
     async def test_caches_embedding_on_miss(
         self, mock_settings, mock_bedrock, mock_postgres
     ):
-        """캐시 미스 시 question_embedding과 embedded_question_text가 컨텍스트에 저장된다."""
-        cached_embedding = [0.42] * 1024
-        mock_bedrock.embed_texts.return_value = [cached_embedding]
+        """캐시 미스 시 question_embedding과 embedded_question_text가 컨텍스트에 저장된다.
+
+        Batch 임베딩 [cache_key, question] 의 [1] 이 question_embedding 으로 매핑.
+        """
+        cache_key_emb = [0.11] * 1024
+        question_emb = [0.42] * 1024
+        mock_bedrock.embed_texts.side_effect = lambda texts, **k: [cache_key_emb, question_emb]
         mock_postgres.search_answer_cache.return_value = None
 
         ctx = _make_context("질문")
         result = await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
-        assert result.question_embedding == cached_embedding
+        assert result.question_embedding == question_emb
         assert result.embedded_question_text == "질문"
 
     async def test_caches_embedding_on_hit(
         self, mock_settings, mock_bedrock, mock_postgres
     ):
         """캐시 히트 시에도 동일하게 보관 (일관성)."""
-        cached_embedding = [0.42] * 1024
-        mock_bedrock.embed_texts.return_value = [cached_embedding]
+        cache_key_emb = [0.11] * 1024
+        question_emb = [0.42] * 1024
+        mock_bedrock.embed_texts.side_effect = lambda texts, **k: [cache_key_emb, question_emb]
         mock_postgres.search_answer_cache.return_value = _make_cache_match()
 
         ctx = _make_context("질문")
         result = await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
 
         assert result.cache_hit is True
-        assert result.question_embedding == cached_embedding
+        assert result.question_embedding == question_emb
         assert result.embedded_question_text == "질문"
 
     async def test_does_not_cache_when_skipped(
@@ -362,6 +385,7 @@ class TestEmbeddingCaching:
         assert result.question_embedding is None
         assert result.embedded_question_text is None
         assert result.embedded_question_input_type is None
+        assert result.cache_key_embedding is None
 
     async def test_caches_input_type_with_embedding(
         self, mock_settings, mock_bedrock, mock_postgres
@@ -382,8 +406,9 @@ class TestEmbeddingCaching:
         하위 단계(vector_search) 가 cache 가 못 한 일을 마저 할 수 있도록 컨텍스트는
         살려둔다. 누군가 except 블록에서 reset 해버리면 silent regression 이라 lock down.
         """
-        cached_embedding = [0.42] * 1024
-        mock_bedrock.embed_texts.return_value = [cached_embedding]
+        cache_key_emb = [0.11] * 1024
+        question_emb = [0.42] * 1024
+        mock_bedrock.embed_texts.side_effect = lambda texts, **k: [cache_key_emb, question_emb]
         mock_postgres.search_answer_cache.side_effect = RuntimeError("DB 실패")
 
         ctx = _make_context("질문")
@@ -391,6 +416,176 @@ class TestEmbeddingCaching:
 
         assert result.cache_hit is False
         # 임베딩은 이미 만들어졌으니 보존되어야 함
-        assert result.question_embedding == cached_embedding
+        assert result.question_embedding == question_emb
         assert result.embedded_question_text == "질문"
         assert result.embedded_question_input_type == "search_query"
+        # cache_key 임베딩도 보존 — _save_answer_cache 가 재사용
+        assert result.cache_key_embedding == cache_key_emb
+
+
+# ── 캐시 키 user_context 분리 ──
+# Cross-user_context cache 누설 차단 (id=10 사고 후속).
+
+
+class TestCacheKeyIsolation:
+    """user_context prefix 를 포함한 캐시 키 임베딩으로 cross-user_context 누설을 차단."""
+
+    def test_cache_key_includes_user_context_prefix(self):
+        """_build_cache_key 결과에 [사용자]/[질문] 마커가 모두 포함된다."""
+        result = _build_cache_key("소프트웨어학부 3학년 재학", "휴학 신청 방법")
+
+        assert "[사용자]" in result
+        assert "[질문]" in result
+        assert "소프트웨어학부 3학년 재학" in result
+        assert "휴학 신청 방법" in result
+
+    def test_cache_key_omits_prefix_when_user_context_empty(self):
+        """user_context 가 비어있으면 question 만 반환 (BE 폴백 경로 호환)."""
+        assert _build_cache_key("", "휴학 신청 방법") == "휴학 신청 방법"
+
+    async def test_check_cache_embeds_with_user_context_prefix(
+        self, mock_settings, mock_bedrock, mock_postgres
+    ):
+        """user_context 가 있으면 embed_texts 의 [0] 입력에 prefix 포함 텍스트."""
+        mock_postgres.search_answer_cache.return_value = None
+
+        ctx = _make_context("휴학 신청 방법")
+        ctx.user_context = "소프트웨어학부 3학년 재학"
+        await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
+
+        call = mock_bedrock.embed_texts.call_args
+        texts = call.args[0]
+        assert len(texts) == 2
+        # [0] = 캐시 키 (prefix 포함), [1] = 검색 키 (원본)
+        assert "[사용자]" in texts[0]
+        assert "소프트웨어학부 3학년 재학" in texts[0]
+        assert texts[1] == "휴학 신청 방법"
+        assert call.kwargs["input_type"] == "search_query"
+
+    async def test_check_cache_stores_cache_key_and_question_embeddings_separately(
+        self, mock_settings, mock_postgres
+    ):
+        """cache_key_embedding 과 question_embedding 이 별도 키 공간이라 다른 벡터로 보관된다."""
+        cache_key_emb = [0.1] * 1024
+        question_emb = [0.9] * 1024
+        bedrock = AsyncMock()
+        bedrock.embed_texts.return_value = [cache_key_emb, question_emb]
+        mock_postgres.search_answer_cache.return_value = None
+
+        ctx = _make_context("질문")
+        ctx.user_context = "테스트 컨텍스트"
+        result = await check_cache(ctx, True, bedrock, mock_postgres, mock_settings)
+
+        assert result.cache_key_embedding == cache_key_emb
+        assert result.question_embedding == question_emb
+        assert result.cache_key_embedding != result.question_embedding
+
+
+# ── _extract_question_from_cache_key (역연산) ──
+
+
+class TestCacheKeyExtraction:
+    """answer_cache.question 컬럼 prefix 텍스트 → 사용자 노출용 원문 추출."""
+
+    def test_extract_with_prefix(self):
+        """prefix 포함 텍스트에서 원문만 추출."""
+        result = _extract_question_from_cache_key(
+            "[사용자] 소프트웨어학부 3학년 재학\n[질문] 휴학 신청 방법"
+        )
+        assert result == "휴학 신청 방법"
+
+    def test_extract_without_prefix(self):
+        """prefix 없는 텍스트는 그대로 반환 (BE 폴백 / 레거시 row 호환)."""
+        assert _extract_question_from_cache_key("휴학 신청 방법") == "휴학 신청 방법"
+
+    def test_extract_roundtrip_with_build(self):
+        """_build_cache_key 의 역연산 — 정확한 round-trip."""
+        original = "휴학 기간이 궁금합니다"
+        uc = "전자공학과 4학년 휴학"
+        key = _build_cache_key(uc, original)
+        assert _extract_question_from_cache_key(key) == original
+
+
+# ── fetch_similar_questions_for_user (A2 dedup + over-fetch) ──
+
+
+class TestFetchSimilarQuestionsForUser:
+    """fallback 추천 — extract + dedup + over-fetch 캡슐화."""
+
+    async def test_extracts_prefix_from_cache_keys(self):
+        """search_similar_questions 결과의 prefix 가 제거된다."""
+        postgres = AsyncMock()
+        postgres.search_similar_questions.return_value = [
+            "[사용자] 소프트웨어학부 3학년 재학\n[질문] 휴학 신청 방법",
+            "[사용자] 영문학부 2학년 재학\n[질문] 졸업 요건",
+            "복학 절차",  # 레거시 (prefix 없음) 호환
+        ]
+        result = await fetch_similar_questions_for_user(
+            postgres=postgres,
+            embedding=[0.1] * 1024,
+            top_k=3,
+            threshold=0.5,
+        )
+        assert result == ["휴학 신청 방법", "졸업 요건", "복학 절차"]
+
+    async def test_dedupes_same_question_different_cohorts(self):
+        """같은 원문이 cohort 별 별도 row 로 등록된 케이스 → 사용자에겐 1번만."""
+        postgres = AsyncMock()
+        # cohort prefix 만 다르고 원문 동일한 3개 + 다른 질문 1개
+        postgres.search_similar_questions.return_value = [
+            "[사용자] 컴공 3학년 재학\n[질문] 휴학 신청 방법",
+            "[사용자] 영문 2학년 재학\n[질문] 휴학 신청 방법",
+            "[사용자] 전자 4학년 재학\n[질문] 휴학 신청 방법",
+            "[사용자] 컴공 3학년 재학\n[질문] 졸업 요건",
+        ]
+        result = await fetch_similar_questions_for_user(
+            postgres=postgres,
+            embedding=[0.1] * 1024,
+            top_k=3,
+            threshold=0.5,
+        )
+        # "휴학 신청 방법" 은 첫 등장 1번만, 그 다음 "졸업 요건"
+        assert result == ["휴학 신청 방법", "졸업 요건"]
+        assert result.count("휴학 신청 방법") == 1
+
+    async def test_over_fetches_to_satisfy_top_k_after_dedup(self):
+        """top_k * 2 over-fetch → dedup 후 top_k 채우기."""
+        postgres = AsyncMock()
+        await fetch_similar_questions_for_user(
+            postgres=postgres,
+            embedding=[0.1] * 1024,
+            top_k=3,
+            threshold=0.5,
+        )
+        # over-fetch: top_k=3 → 6 요청
+        call = postgres.search_similar_questions.call_args
+        assert call.kwargs["top_k"] == 6
+        assert call.kwargs["threshold"] == 0.5
+
+
+# ── CACHE_EMBED_INPUT_TYPE 상수 단일화 검증 ──
+
+
+class TestCacheEmbedInputType:
+    """check_cache / _save_answer_cache 양쪽이 동일한 input_type 사용 보장.
+
+    Task 16 의 (text, input_type) 가드 필드를 두는 대신 모듈 상수 단일화로
+    invariant 가 구조적으로 성립함을 잠근다 (외부 리뷰 7.4).
+    """
+
+    def test_cache_embed_input_type_is_search_query(self):
+        """상수 값 회귀 잠금 — 변경 시 caller 모두 동기 인지 강제."""
+        assert CACHE_EMBED_INPUT_TYPE == "search_query"
+
+    async def test_check_cache_uses_constant_for_input_type(
+        self, mock_settings, mock_bedrock, mock_postgres
+    ):
+        """check_cache 가 CACHE_EMBED_INPUT_TYPE 상수를 input_type 으로 전달."""
+        mock_postgres.search_answer_cache.return_value = None
+
+        ctx = _make_context("질문")
+        ctx.user_context = "테스트 컨텍스트"
+        await check_cache(ctx, True, mock_bedrock, mock_postgres, mock_settings)
+
+        call = mock_bedrock.embed_texts.call_args
+        assert call.kwargs["input_type"] == CACHE_EMBED_INPUT_TYPE

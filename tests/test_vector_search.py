@@ -257,7 +257,11 @@ class TestSearchDocumentsUnit:
         assert result.suggested_questions == ["질문1", "질문2", "질문3"]
 
     async def test_fallback_passes_threshold_to_postgres(self):
-        """이슈 #46: fallback 호출 시 settings.FALLBACK_SIMILARITY_THRESHOLD 가 전달된다."""
+        """이슈 #46: fallback 호출 시 settings.FALLBACK_SIMILARITY_THRESHOLD 가 전달된다.
+
+        fetch_similar_questions_for_user 는 dedup 여유 확보를 위해 ``top_k * 2``
+        로 over-fetch 한 뒤 사용자에게 ``top_k`` 만 노출한다 (외부 리뷰 A2 처리).
+        """
         settings = _create_settings()
         bedrock = _create_bedrock()
         postgres = _create_postgres(search_results=[], similar_questions=["q"])
@@ -267,7 +271,8 @@ class TestSearchDocumentsUnit:
 
         call_kwargs = postgres.search_similar_questions.call_args.kwargs
         assert call_kwargs["threshold"] == settings.FALLBACK_SIMILARITY_THRESHOLD
-        assert call_kwargs["top_k"] == settings.FALLBACK_SUGGESTED_COUNT
+        # over-fetch — dedup 후 top_k 채우기 위해 2배 요청
+        assert call_kwargs["top_k"] == settings.FALLBACK_SUGGESTED_COUNT * 2
 
     async def test_no_fallback_when_results_exist(self):
         """검색 결과가 있으면 search_similar_questions가 호출되지 않는다."""
@@ -279,6 +284,92 @@ class TestSearchDocumentsUnit:
         await search_documents(ctx, bedrock, postgres, settings)
 
         postgres.search_similar_questions.assert_not_called()
+
+    async def test_fallback_extracts_question_from_cache_key(self):
+        """fallback 추천 질문에서 cohort prefix 가 사용자 노출 전 제거된다."""
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        postgres = _create_postgres(
+            search_results=[],
+            similar_questions=[
+                "[사용자] 소프트웨어학부 3학년 재학\n[질문] 휴학 신청 방법",
+                "[사용자] 영문학부 2학년 재학\n[질문] 졸업 요건",
+                "복학 절차",  # 레거시 (prefix 없음) 호환
+            ],
+        )
+
+        ctx = _make_context()
+        result = await search_documents(ctx, bedrock, postgres, settings)
+
+        assert result.suggested_questions == ["휴학 신청 방법", "졸업 요건", "복학 절차"]
+
+    async def test_fallback_dedupes_same_question_different_cohorts(self):
+        """같은 원문 질문이 cohort 별 별도 row 로 등록된 경우 사용자에겐 1번만 노출.
+
+        외부 리뷰 A2 — cache_key 분리 후 인기 cross-cohort 질문이 추천 목록에서
+        중복으로 뜨는 사고 차단.
+        """
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        postgres = _create_postgres(
+            search_results=[],
+            similar_questions=[
+                "[사용자] 컴공 3학년 재학\n[질문] 휴학 신청 방법",
+                "[사용자] 영문 2학년 재학\n[질문] 휴학 신청 방법",
+                "[사용자] 전자 4학년 재학\n[질문] 휴학 신청 방법",
+                "[사용자] 컴공 3학년 재학\n[질문] 졸업 요건",
+            ],
+        )
+
+        ctx = _make_context()
+        result = await search_documents(ctx, bedrock, postgres, settings)
+
+        assert result.suggested_questions == ["휴학 신청 방법", "졸업 요건"]
+        assert result.suggested_questions.count("휴학 신청 방법") == 1
+
+    async def test_fallback_uses_cache_key_embedding_when_available(self):
+        """외부 리뷰 N1 — answer_cache.embedding 컬럼이 prefix 포함 임베딩으로
+        저장되므로 fallback 검색 키도 cache_key_embedding 을 사용해야 공간 일치.
+
+        같은 cohort 의 비슷한 질문이 우선 추천된다.
+        """
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        postgres = _create_postgres(
+            search_results=[],
+            similar_questions=["복학 절차"],
+        )
+
+        cache_key_emb = [0.42] * 1024
+        ctx = _make_context("질문")
+        ctx.cache_key_embedding = cache_key_emb
+        await search_documents(ctx, bedrock, postgres, settings)
+
+        call_kwargs = postgres.search_similar_questions.call_args.kwargs
+        assert call_kwargs["embedding"] == cache_key_emb
+
+    async def test_fallback_falls_back_to_question_embedding_when_cache_key_none(self):
+        """N1 graceful degrade — cache_key_embedding 이 None (멀티턴 academic 등
+        semantic_cache skip) 인 경로에선 question_embedding 으로 fallback.
+
+        거리 정합성 미세 저하 수용 — fallback 자체 발동 빈도가 낮음.
+        """
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        postgres = _create_postgres(
+            search_results=[],
+            similar_questions=["복학 절차"],
+        )
+
+        ctx = _make_context("질문")
+        assert ctx.cache_key_embedding is None
+        await search_documents(ctx, bedrock, postgres, settings)
+
+        # search_similar_questions 호출은 됐고, embedding 인자는 question_embedding
+        # (bedrock mock 의 side_effect 첫 임베딩) 으로 fallback
+        postgres.search_similar_questions.assert_called_once()
+        call_kwargs = postgres.search_similar_questions.call_args.kwargs
+        assert call_kwargs["embedding"] is not None
 
     async def test_input_type_search_query(self):
         """임베딩 호출 시 input_type이 search_query인지 확인."""
