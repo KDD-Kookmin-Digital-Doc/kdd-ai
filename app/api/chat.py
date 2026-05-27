@@ -23,6 +23,7 @@ from app.pipeline.query_rewriter import rewrite_query
 from app.pipeline.semantic_cache import (
     CACHE_EMBED_INPUT_TYPE,
     _build_cache_key,
+    _strip_freeform_from_user_context,
     check_cache,
 )
 from app.pipeline.vector_search import search_documents
@@ -178,6 +179,20 @@ async def _save_answer_cache(
                 "캐시 저장 skip — 오염 답변 패턴 감지: question=%r, answer_preview=%r",
                 context.original_question,
                 full_answer[:120],
+            )
+            return
+
+        # Layer 4 — freeform 캐시 skip (BE PR #96 후속).
+        # user_context 에 BE 의 자유 입력 (학생 additionalInfo / 직원 jobDescription,
+        # 각 250자 캡) 이 부착된 경우 LLM 답변이 그것을 반영했을 수 있음. cohort
+        # 키 캐시 풀에 박히면 같은 cohort 다른 자유 입력 사용자에게 (a) 관련성
+        # 누설 + (b) PII 누설 위험 (자유 입력 = 임의 250자 텍스트). 따라서
+        # freeform 사용자 답변은 캐시 안 함 — 매번 LLM 호출 비용 수용하고
+        # 개인화는 살리되 누설 0. 캐시 풀엔 cohort-순수 답변만 남는 invariant.
+        if _strip_freeform_from_user_context(context.user_context) != context.user_context:
+            logger.info(
+                "캐시 저장 skip — 자유 입력 개인화 답변 (cohort 공유 부적격): question=%r",
+                context.original_question,
             )
             return
 

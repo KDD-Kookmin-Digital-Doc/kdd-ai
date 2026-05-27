@@ -571,6 +571,80 @@ class TestAnswerCacheCompleteness:
         assert "캐시 저장 skip — 오염 답변 패턴 감지" in caplog.text
         postgres.upsert_answer_cache.assert_not_called()
 
+    # ── Layer 4 — freeform 캐시 skip (BE PR #96 후속, 외부 리뷰 M1) ──
+
+    async def test_save_skips_cache_when_user_context_has_additional_info(self):
+        """학생 자유 입력 (additionalInfo) 부착 시 캐시 저장 skip — cohort 누설 차단."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="휴학 신청 방법은?",
+            user_context="소프트웨어학부 2024학번 3학년 재학. 추가 정보: 부전공 통계학 신청 예정",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
+
+        postgres.upsert_answer_cache.assert_not_called()
+
+    async def test_save_skips_cache_when_user_context_has_job_description(self):
+        """직원 자유 입력 (jobDescription) 부착 시 캐시 저장 skip."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="직원 휴가 신청 절차는?",
+            user_context="학사지원과 직원. 담당 업무: 졸업 사정 + 학적 변동 처리",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
+
+        postgres.upsert_answer_cache.assert_not_called()
+
+    async def test_save_logs_info_on_freeform_skip(self, caplog):
+        """Layer 4 발동 시 INFO 로그 박힘 (CloudWatch 모니터링 — freeform 사용자 비율 추적)."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="질문",
+            user_context="컴공 3학년 재학. 추가 정보: 부전공 통계학",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+
+        with caplog.at_level(logging.INFO):
+            await _save_answer_cache(
+                context, ["답변"], bedrock, postgres, _create_settings()
+            )
+
+        assert "캐시 저장 skip — 자유 입력 개인화 답변" in caplog.text
+        postgres.upsert_answer_cache.assert_not_called()
+
+    async def test_save_accepts_when_no_freeform_in_user_context(self):
+        """cohort-only user_context (freeform 없음) → 정상 캐시 저장 (기존 행동 보존)."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="휴학 신청 방법은?",
+            user_context="소프트웨어학부 2024학번 3학년 재학",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
+
+        postgres.upsert_answer_cache.assert_called_once()
+
     async def test_save_includes_high_confidence(self):
         """search_results 최고 유사도가 HIGH 임계값(0.9) 이상이면 'high' 박제.
 
