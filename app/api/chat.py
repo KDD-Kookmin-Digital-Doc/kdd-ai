@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, Request
@@ -28,6 +29,17 @@ from app.pipeline.vector_search import search_documents
 from app.streaming.sse import determine_confidence, stream_sse_response
 
 logger = logging.getLogger(__name__)
+
+# 오염 답변 캐시 WRITE 게이트 — LLM 환각 패턴 ("당신은 X학번 이전 학생" 등) 이
+# 답변 본문에 박힌 경우 캐시 저장을 거부. id=10 사고 후속 처방의 Layer 2
+# (Layer 1: 시스템 프롬프트 가드 / Layer 2: 본 정규식 게이트 / Layer 3: dedup
+# 키 cohort 분리). SSE 송출엔 영향 없고 캐시 저장만 skip — 다음 사용자가
+# 환각 답변에 cache hit 받는 경로 자체 차단.
+_POLLUTED_ANSWER_PATTERN = re.compile(
+    r"당신은\s*\d{2,4}학번"
+    r"|본인은\s*\d{2,4}학번"
+    r"|\d{2,4}학번\s*(?:이전|이후)\s*(?:이신|이며|학생이|이라|이므로|이라면|이시면)"
+)
 
 _pending_cache_writes: set[asyncio.Task] = set()
 
@@ -154,6 +166,20 @@ async def _save_answer_cache(
     """
     try:
         full_answer = "".join(answer_parts)
+
+        # 오염 답변 WRITE 게이트 (Layer 2) — LLM 자발 준수 (Layer 1 시스템
+        # 프롬프트 가드) 실패 시 환각 답변이 캐시에 박히는 것 자체 차단.
+        # SSE 송출은 이미 완료 (본 사용자엔 영향 0), 캐시 저장만 skip → 다음
+        # 사용자가 cache hit 으로 leak 받는 경로 차단. same-cohort cross-share
+        # 도 함께 닫음 (dedup 키 분리 [Layer 3] 가 못 닫는 갭).
+        # 로그 prefix "캐시 저장 skip — 오염 답변" 으로 CloudWatch 모니터링 호환.
+        if _POLLUTED_ANSWER_PATTERN.search(full_answer):
+            logger.warning(
+                "캐시 저장 skip — 오염 답변 패턴 감지: question=%r, answer_preview=%r",
+                context.original_question,
+                full_answer[:120],
+            )
+            return
 
         # cache_key_text 는 dedup/lock 키 (answer_cache.question 컬럼) + 임베딩
         # 원문 양쪽에 사용. semantic_cache 와 동일한 _build_cache_key 호출.
