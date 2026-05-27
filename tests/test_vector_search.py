@@ -327,6 +327,50 @@ class TestSearchDocumentsUnit:
         assert result.suggested_questions == ["휴학 신청 방법", "졸업 요건"]
         assert result.suggested_questions.count("휴학 신청 방법") == 1
 
+    async def test_fallback_uses_cache_key_embedding_when_available(self):
+        """외부 리뷰 N1 — answer_cache.embedding 컬럼이 prefix 포함 임베딩으로
+        저장되므로 fallback 검색 키도 cache_key_embedding 을 사용해야 공간 일치.
+
+        같은 cohort 의 비슷한 질문이 우선 추천된다.
+        """
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        postgres = _create_postgres(
+            search_results=[],
+            similar_questions=["복학 절차"],
+        )
+
+        cache_key_emb = [0.42] * 1024
+        ctx = _make_context("질문")
+        ctx.cache_key_embedding = cache_key_emb
+        await search_documents(ctx, bedrock, postgres, settings)
+
+        call_kwargs = postgres.search_similar_questions.call_args.kwargs
+        assert call_kwargs["embedding"] == cache_key_emb
+
+    async def test_fallback_falls_back_to_question_embedding_when_cache_key_none(self):
+        """N1 graceful degrade — cache_key_embedding 이 None (멀티턴 academic 등
+        semantic_cache skip) 인 경로에선 question_embedding 으로 fallback.
+
+        거리 정합성 미세 저하 수용 — fallback 자체 발동 빈도가 낮음.
+        """
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        postgres = _create_postgres(
+            search_results=[],
+            similar_questions=["복학 절차"],
+        )
+
+        ctx = _make_context("질문")
+        assert ctx.cache_key_embedding is None
+        await search_documents(ctx, bedrock, postgres, settings)
+
+        # search_similar_questions 호출은 됐고, embedding 인자는 question_embedding
+        # (bedrock mock 의 side_effect 첫 임베딩) 으로 fallback
+        postgres.search_similar_questions.assert_called_once()
+        call_kwargs = postgres.search_similar_questions.call_args.kwargs
+        assert call_kwargs["embedding"] is not None
+
     async def test_input_type_search_query(self):
         """임베딩 호출 시 input_type이 search_query인지 확인."""
         settings = _create_settings()
