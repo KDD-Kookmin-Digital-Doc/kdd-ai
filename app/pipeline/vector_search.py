@@ -8,6 +8,7 @@ from app.clients.bedrock import BedrockClient
 from app.clients.postgres_client import PostgresVectorClient
 from app.config import Settings
 from app.models.pipeline import PipelineContext, SearchResult, SourceDoc
+from app.pipeline.semantic_cache import fetch_similar_questions_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,11 @@ async def search_documents(
             results[0].similarity_score,
         )
     else:
-        suggested = await postgres.search_similar_questions(
+        # fetch+extract 단일함수 — answer_cache.question 컬럼의 cohort prefix
+        # 텍스트에서 원문만 복원 + 같은 원문 cohort 별 중복 제거 + over-fetch.
+        # 사용자 화면에 prefix 노출 차단 + 동일 추천 중복 차단.
+        suggested = await fetch_similar_questions_for_user(
+            postgres=postgres,
             embedding=question_embedding,
             top_k=settings.FALLBACK_SUGGESTED_COUNT,
             threshold=settings.FALLBACK_SIMILARITY_THRESHOLD,

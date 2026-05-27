@@ -12,7 +12,13 @@ from hypothesis import strategies as st
 
 from app.config import Settings
 from app.models.pipeline import CacheMatch, PipelineContext, SourceDoc, TokenUsage
-from app.pipeline.semantic_cache import _build_cache_key, check_cache
+from app.pipeline.semantic_cache import (
+    CACHE_EMBED_INPUT_TYPE,
+    _build_cache_key,
+    _extract_question_from_cache_key,
+    check_cache,
+    fetch_similar_questions_for_user,
+)
 
 
 # ── 헬퍼: 속성 테스트와 fixture 모두에서 사용 ──
@@ -467,3 +473,85 @@ class TestCacheKeyIsolation:
         assert result.cache_key_embedding == cache_key_emb
         assert result.question_embedding == question_emb
         assert result.cache_key_embedding != result.question_embedding
+
+
+# ── _extract_question_from_cache_key (역연산) ──
+
+
+class TestCacheKeyExtraction:
+    """answer_cache.question 컬럼 prefix 텍스트 → 사용자 노출용 원문 추출."""
+
+    def test_extract_with_prefix(self):
+        """prefix 포함 텍스트에서 원문만 추출."""
+        result = _extract_question_from_cache_key(
+            "[사용자] 소프트웨어학부 3학년 재학\n[질문] 휴학 신청 방법"
+        )
+        assert result == "휴학 신청 방법"
+
+    def test_extract_without_prefix(self):
+        """prefix 없는 텍스트는 그대로 반환 (BE 폴백 / 레거시 row 호환)."""
+        assert _extract_question_from_cache_key("휴학 신청 방법") == "휴학 신청 방법"
+
+    def test_extract_roundtrip_with_build(self):
+        """_build_cache_key 의 역연산 — 정확한 round-trip."""
+        original = "휴학 기간이 궁금합니다"
+        uc = "전자공학과 4학년 휴학"
+        key = _build_cache_key(uc, original)
+        assert _extract_question_from_cache_key(key) == original
+
+
+# ── fetch_similar_questions_for_user (A2 dedup + over-fetch) ──
+
+
+class TestFetchSimilarQuestionsForUser:
+    """fallback 추천 — extract + dedup + over-fetch 캡슐화."""
+
+    async def test_extracts_prefix_from_cache_keys(self):
+        """search_similar_questions 결과의 prefix 가 제거된다."""
+        postgres = AsyncMock()
+        postgres.search_similar_questions.return_value = [
+            "[사용자] 소프트웨어학부 3학년 재학\n[질문] 휴학 신청 방법",
+            "[사용자] 영문학부 2학년 재학\n[질문] 졸업 요건",
+            "복학 절차",  # 레거시 (prefix 없음) 호환
+        ]
+        result = await fetch_similar_questions_for_user(
+            postgres=postgres,
+            embedding=[0.1] * 1024,
+            top_k=3,
+            threshold=0.5,
+        )
+        assert result == ["휴학 신청 방법", "졸업 요건", "복학 절차"]
+
+    async def test_dedupes_same_question_different_cohorts(self):
+        """같은 원문이 cohort 별 별도 row 로 등록된 케이스 → 사용자에겐 1번만."""
+        postgres = AsyncMock()
+        # cohort prefix 만 다르고 원문 동일한 3개 + 다른 질문 1개
+        postgres.search_similar_questions.return_value = [
+            "[사용자] 컴공 3학년 재학\n[질문] 휴학 신청 방법",
+            "[사용자] 영문 2학년 재학\n[질문] 휴학 신청 방법",
+            "[사용자] 전자 4학년 재학\n[질문] 휴학 신청 방법",
+            "[사용자] 컴공 3학년 재학\n[질문] 졸업 요건",
+        ]
+        result = await fetch_similar_questions_for_user(
+            postgres=postgres,
+            embedding=[0.1] * 1024,
+            top_k=3,
+            threshold=0.5,
+        )
+        # "휴학 신청 방법" 은 첫 등장 1번만, 그 다음 "졸업 요건"
+        assert result == ["휴학 신청 방법", "졸업 요건"]
+        assert result.count("휴학 신청 방법") == 1
+
+    async def test_over_fetches_to_satisfy_top_k_after_dedup(self):
+        """top_k * 2 over-fetch → dedup 후 top_k 채우기."""
+        postgres = AsyncMock()
+        await fetch_similar_questions_for_user(
+            postgres=postgres,
+            embedding=[0.1] * 1024,
+            top_k=3,
+            threshold=0.5,
+        )
+        # over-fetch: top_k=3 → 6 요청
+        call = postgres.search_similar_questions.call_args
+        assert call.kwargs["top_k"] == 6
+        assert call.kwargs["threshold"] == 0.5

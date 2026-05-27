@@ -19,7 +19,11 @@ from app.models.pipeline import AnswerCache, PipelineContext
 from app.models.schemas import ChatRequest, ErrorResponse
 from app.pipeline.intent_router import classify_intent
 from app.pipeline.query_rewriter import rewrite_query
-from app.pipeline.semantic_cache import _build_cache_key, check_cache
+from app.pipeline.semantic_cache import (
+    CACHE_EMBED_INPUT_TYPE,
+    _build_cache_key,
+    check_cache,
+)
 from app.pipeline.vector_search import search_documents
 from app.streaming.sse import determine_confidence, stream_sse_response
 
@@ -151,19 +155,22 @@ async def _save_answer_cache(
     try:
         full_answer = "".join(answer_parts)
 
+        # cache_key_text 는 dedup/lock 키 (answer_cache.question 컬럼) + 임베딩
+        # 원문 양쪽에 사용. semantic_cache 와 동일한 _build_cache_key 호출.
+        cache_key_text = _build_cache_key(
+            context.user_context, context.original_question
+        )
+
         # cache_key_embedding 재사용 — semantic_cache.check_cache 가 보관한 값.
         # None 이면 semantic_cache 단계가 skip 된 경로 (멀티턴 academic 등) →
-        # _build_cache_key 로 텍스트 재구성 후 새로 임베딩한다.
-        # contract 상세는 PipelineContext docstring 참조.
+        # cache_key_text 로 새로 임베딩한다. input_type 은 CACHE_EMBED_INPUT_TYPE
+        # 상수로 search 측과 일원화 — silent quality degradation 위험 0.
         if context.cache_key_embedding is not None:
             cache_key_embedding = context.cache_key_embedding
             logger.debug("_save_answer_cache 캐시 키 임베딩 재사용")
         else:
-            cache_key_text = _build_cache_key(
-                context.user_context, context.original_question
-            )
             embeddings = await bedrock.embed_texts(
-                [cache_key_text], input_type="search_query"
+                [cache_key_text], input_type=CACHE_EMBED_INPUT_TYPE
             )
             cache_key_embedding = embeddings[0]
             logger.debug("_save_answer_cache 캐시 키 임베딩 신규 호출")
@@ -177,11 +184,12 @@ async def _save_answer_cache(
         # 동일 값을 노출해 cache miss(시나리오 A)와 UX 정합 유지.
         confidence = determine_confidence(context.search_results, settings)
 
-        # question 컬럼은 원문 그대로 — 디버깅용 SQL 가독성 + upsert_answer_cache
-        # RPC 의 pg_advisory_xact_lock(hashtext(p_question)) 키 호환성 보호.
-        # embedding 컬럼만 user_context prefix 포함 임베딩으로 박힌다.
+        # answer_cache.question 컬럼에 cache_key_text (prefix 포함) 저장 — RPC
+        # 의 DELETE WHERE question = ... dedup 키 + pg_advisory_xact_lock 락 키가
+        # cohort 별로 갈라져 cross-cohort thrash + 락 경합 해결 (id=10 사고 후속).
+        # 사용자 노출용 변환은 fetch_similar_questions_for_user 가 책임.
         cache = AnswerCache(
-            question=context.original_question,
+            question=cache_key_text,
             embedding=cache_key_embedding,
             answer=full_answer,
             source_doc_ids=source_doc_ids,

@@ -257,7 +257,11 @@ class TestSearchDocumentsUnit:
         assert result.suggested_questions == ["질문1", "질문2", "질문3"]
 
     async def test_fallback_passes_threshold_to_postgres(self):
-        """이슈 #46: fallback 호출 시 settings.FALLBACK_SIMILARITY_THRESHOLD 가 전달된다."""
+        """이슈 #46: fallback 호출 시 settings.FALLBACK_SIMILARITY_THRESHOLD 가 전달된다.
+
+        fetch_similar_questions_for_user 는 dedup 여유 확보를 위해 ``top_k * 2``
+        로 over-fetch 한 뒤 사용자에게 ``top_k`` 만 노출한다 (외부 리뷰 A2 처리).
+        """
         settings = _create_settings()
         bedrock = _create_bedrock()
         postgres = _create_postgres(search_results=[], similar_questions=["q"])
@@ -267,7 +271,8 @@ class TestSearchDocumentsUnit:
 
         call_kwargs = postgres.search_similar_questions.call_args.kwargs
         assert call_kwargs["threshold"] == settings.FALLBACK_SIMILARITY_THRESHOLD
-        assert call_kwargs["top_k"] == settings.FALLBACK_SUGGESTED_COUNT
+        # over-fetch — dedup 후 top_k 채우기 위해 2배 요청
+        assert call_kwargs["top_k"] == settings.FALLBACK_SUGGESTED_COUNT * 2
 
     async def test_no_fallback_when_results_exist(self):
         """검색 결과가 있으면 search_similar_questions가 호출되지 않는다."""
@@ -279,6 +284,48 @@ class TestSearchDocumentsUnit:
         await search_documents(ctx, bedrock, postgres, settings)
 
         postgres.search_similar_questions.assert_not_called()
+
+    async def test_fallback_extracts_question_from_cache_key(self):
+        """fallback 추천 질문에서 cohort prefix 가 사용자 노출 전 제거된다."""
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        postgres = _create_postgres(
+            search_results=[],
+            similar_questions=[
+                "[사용자] 소프트웨어학부 3학년 재학\n[질문] 휴학 신청 방법",
+                "[사용자] 영문학부 2학년 재학\n[질문] 졸업 요건",
+                "복학 절차",  # 레거시 (prefix 없음) 호환
+            ],
+        )
+
+        ctx = _make_context()
+        result = await search_documents(ctx, bedrock, postgres, settings)
+
+        assert result.suggested_questions == ["휴학 신청 방법", "졸업 요건", "복학 절차"]
+
+    async def test_fallback_dedupes_same_question_different_cohorts(self):
+        """같은 원문 질문이 cohort 별 별도 row 로 등록된 경우 사용자에겐 1번만 노출.
+
+        외부 리뷰 A2 — cache_key 분리 후 인기 cross-cohort 질문이 추천 목록에서
+        중복으로 뜨는 사고 차단.
+        """
+        settings = _create_settings()
+        bedrock = _create_bedrock()
+        postgres = _create_postgres(
+            search_results=[],
+            similar_questions=[
+                "[사용자] 컴공 3학년 재학\n[질문] 휴학 신청 방법",
+                "[사용자] 영문 2학년 재학\n[질문] 휴학 신청 방법",
+                "[사용자] 전자 4학년 재학\n[질문] 휴학 신청 방법",
+                "[사용자] 컴공 3학년 재학\n[질문] 졸업 요건",
+            ],
+        )
+
+        ctx = _make_context()
+        result = await search_documents(ctx, bedrock, postgres, settings)
+
+        assert result.suggested_questions == ["휴학 신청 방법", "졸업 요건"]
+        assert result.suggested_questions.count("휴학 신청 방법") == 1
 
     async def test_input_type_search_query(self):
         """임베딩 호출 시 input_type이 search_query인지 확인."""

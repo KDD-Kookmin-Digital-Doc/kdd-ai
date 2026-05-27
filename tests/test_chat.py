@@ -423,22 +423,43 @@ class TestAnswerCacheCompleteness:
         assert "휴학 기간은?" in texts[0]
         assert call.kwargs["input_type"] == "search_query"
 
-    async def test_save_cache_row_stores_original_question_not_prefix(self):
-        """answer_cache.question 컬럼엔 원문 그대로 저장 — prefix 텍스트 X.
+    async def test_save_uses_cache_key_text_in_question_column(self):
+        """answer_cache.question 컬럼에 _build_cache_key 결과가 박혀 dedup 키 분리.
 
-        디버깅용 SQL (`WHERE answer ~ ...` 등) 가독성 + upsert_answer_cache RPC 의
-        pg_advisory_xact_lock(hashtext(p_question)) 키 호환성 보호.
-        embedding 컬럼만 user_context prefix 임베딩으로 분리.
+        RPC upsert_answer_cache 의 DELETE WHERE question = ... dedup 키 + 락 키
+        둘 다 cohort 별로 갈라져 cross-cohort thrash 차단 + 락 경합 해결
+        (외부 리뷰 B1 a/b 처리).
         """
         bedrock = _create_bedrock()
         postgres = _create_postgres()
-
         context = PipelineContext(
             original_question="휴학 기간은?",
             user_context="소프트웨어학부 3학년 재학",
             intent="academic",
             search_results=[_make_search_result(doc_id=1)],
-            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="학사요람.pdf", page=10)],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=10)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
+
+        cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
+        assert "[사용자] 소프트웨어학부 3학년 재학" in cache.question
+        assert "[질문] 휴학 기간은?" in cache.question
+
+    async def test_save_with_empty_user_context_uses_original_question(self):
+        """user_context 가 비어있으면 cache.question 에 원문 그대로 (BE 폴백 호환).
+
+        _build_cache_key contract — user_context 빈 경우 question 만 반환.
+        """
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="휴학 기간은?",
+            user_context="",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=10)],
             cache_key_embedding=[0.42] * 1024,
         )
 
