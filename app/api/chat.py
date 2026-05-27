@@ -19,7 +19,7 @@ from app.models.pipeline import AnswerCache, PipelineContext
 from app.models.schemas import ChatRequest, ErrorResponse
 from app.pipeline.intent_router import classify_intent
 from app.pipeline.query_rewriter import rewrite_query
-from app.pipeline.semantic_cache import check_cache
+from app.pipeline.semantic_cache import _build_cache_key, check_cache
 from app.pipeline.vector_search import search_documents
 from app.streaming.sse import determine_confidence, stream_sse_response
 
@@ -150,23 +150,23 @@ async def _save_answer_cache(
     """
     try:
         full_answer = "".join(answer_parts)
-        # Task 16: semantic_cache가 original_question을 search_query로 임베딩한 결과를 재사용.
-        # vector_search가 rewrite 분기에서 새 임베딩을 만들어도 context.question_embedding은
-        # 갱신되지 않으므로 여기서도 original 측 임베딩이 안전하게 유지됨.
-        # input_type 까지 비교해 미래에 cache 측 input_type 이 바뀌면 자동으로 새로 호출.
-        if (
-            context.question_embedding is not None
-            and context.embedded_question_text == context.original_question
-            and context.embedded_question_input_type == "search_query"
-        ):
-            question_embedding = context.question_embedding
-            logger.debug("_save_answer_cache 임베딩 재사용")
+
+        # cache_key_embedding 재사용 — semantic_cache.check_cache 가 보관한 값.
+        # None 이면 semantic_cache 단계가 skip 된 경로 (멀티턴 academic 등) →
+        # _build_cache_key 로 텍스트 재구성 후 새로 임베딩한다.
+        # contract 상세는 PipelineContext docstring 참조.
+        if context.cache_key_embedding is not None:
+            cache_key_embedding = context.cache_key_embedding
+            logger.debug("_save_answer_cache 캐시 키 임베딩 재사용")
         else:
-            embeddings = await bedrock.embed_texts(
-                [context.original_question], input_type="search_query"
+            cache_key_text = _build_cache_key(
+                context.user_context, context.original_question
             )
-            question_embedding = embeddings[0]
-            logger.debug("_save_answer_cache 임베딩 신규 호출")
+            embeddings = await bedrock.embed_texts(
+                [cache_key_text], input_type="search_query"
+            )
+            cache_key_embedding = embeddings[0]
+            logger.debug("_save_answer_cache 캐시 키 임베딩 신규 호출")
 
         source_doc_ids = list({r.doc_id for r in (context.search_results or [])})
         sources = [
@@ -177,9 +177,12 @@ async def _save_answer_cache(
         # 동일 값을 노출해 cache miss(시나리오 A)와 UX 정합 유지.
         confidence = determine_confidence(context.search_results, settings)
 
+        # question 컬럼은 원문 그대로 — 디버깅용 SQL 가독성 + upsert_answer_cache
+        # RPC 의 pg_advisory_xact_lock(hashtext(p_question)) 키 호환성 보호.
+        # embedding 컬럼만 user_context prefix 포함 임베딩으로 박힌다.
         cache = AnswerCache(
             question=context.original_question,
-            embedding=question_embedding,
+            embedding=cache_key_embedding,
             answer=full_answer,
             source_doc_ids=source_doc_ids,
             sources=sources,

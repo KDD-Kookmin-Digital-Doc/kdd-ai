@@ -369,8 +369,12 @@ class TestAnswerCacheCompleteness:
         assert cache.source_doc_ids
         assert cache.sources
 
-    async def test_save_reuses_cached_embedding(self):
-        """semantic_cache가 보관한 임베딩을 재사용 (Task 16) — embed_texts 호출 X."""
+    async def test_save_reuses_cache_key_embedding(self):
+        """semantic_cache 가 보관한 cache_key_embedding 을 재사용 — embed_texts 호출 X.
+
+        Task 16 후속 — 재사용 키가 검색용 question_embedding 에서 캐시 키
+        cache_key_embedding 으로 변경됨 (cross-user_context 누설 차단 도입).
+        """
         bedrock = _create_bedrock()
         postgres = _create_postgres()
 
@@ -380,9 +384,7 @@ class TestAnswerCacheCompleteness:
             intent="academic",
             search_results=[_make_search_result(doc_id=1)],
             source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="학사요람.pdf", page=10)],
-            question_embedding=cached_embedding,
-            embedded_question_text="휴학 기간은?",
-            embedded_question_input_type="search_query",
+            cache_key_embedding=cached_embedding,
         )
 
         await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
@@ -391,66 +393,60 @@ class TestAnswerCacheCompleteness:
         cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
         assert cache.embedding == cached_embedding
 
-    async def test_save_creates_new_embedding_when_input_type_mismatch(self):
-        """input_type 이 search_query 가 아니면 새로 호출 (silent degradation 가드)."""
+    async def test_save_creates_new_cache_key_embedding_when_none(self):
+        """context.cache_key_embedding 이 None 이면 _build_cache_key 결과로 새로 임베딩.
+
+        멀티턴 academic 시나리오처럼 semantic_cache 단계가 skip 된 경로에서
+        _save_answer_cache 가 cache 키를 직접 구성해야 한다.
+        """
         bedrock = _create_bedrock()
         postgres = _create_postgres()
 
         context = PipelineContext(
             original_question="휴학 기간은?",
-            intent="academic",
-            search_results=[_make_search_result(doc_id=1)],
-            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
-            question_embedding=[0.42] * 1024,
-            embedded_question_text="휴학 기간은?",
-            embedded_question_input_type="search_document",  # ← 잘못 set된 케이스
-        )
-
-        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
-
-        bedrock.embed_texts.assert_called_once_with(
-            ["휴학 기간은?"], input_type="search_query"
-        )
-
-    async def test_save_creates_new_embedding_when_no_cache(self):
-        """context.question_embedding이 None이면 새로 임베딩 (예: cache 단계가 실패한 케이스)."""
-        bedrock = _create_bedrock()
-        postgres = _create_postgres()
-
-        context = PipelineContext(
-            original_question="휴학 기간은?",
+            user_context="소프트웨어학부 3학년 재학",
             intent="academic",
             search_results=[_make_search_result(doc_id=1)],
             source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="학사요람.pdf", page=10)],
         )
-        # question_embedding은 기본값 None
-        assert context.question_embedding is None
+        assert context.cache_key_embedding is None
 
         await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
 
-        bedrock.embed_texts.assert_called_once_with(
-            ["휴학 기간은?"], input_type="search_query"
-        )
+        # _build_cache_key 결과 = "[사용자] 소프트웨어학부 3학년 재학\n[질문] 휴학 기간은?"
+        bedrock.embed_texts.assert_called_once()
+        call = bedrock.embed_texts.call_args
+        texts = call.args[0]
+        assert len(texts) == 1
+        assert "[사용자]" in texts[0]
+        assert "소프트웨어학부 3학년 재학" in texts[0]
+        assert "휴학 기간은?" in texts[0]
+        assert call.kwargs["input_type"] == "search_query"
 
-    async def test_save_creates_new_embedding_when_text_mismatch(self):
-        """embedded_question_text가 original_question과 다르면 새로 임베딩 (방어)."""
+    async def test_save_cache_row_stores_original_question_not_prefix(self):
+        """answer_cache.question 컬럼엔 원문 그대로 저장 — prefix 텍스트 X.
+
+        디버깅용 SQL (`WHERE answer ~ ...` 등) 가독성 + upsert_answer_cache RPC 의
+        pg_advisory_xact_lock(hashtext(p_question)) 키 호환성 보호.
+        embedding 컬럼만 user_context prefix 임베딩으로 분리.
+        """
         bedrock = _create_bedrock()
         postgres = _create_postgres()
 
         context = PipelineContext(
-            original_question="원본 질문",
+            original_question="휴학 기간은?",
+            user_context="소프트웨어학부 3학년 재학",
             intent="academic",
             search_results=[_make_search_result(doc_id=1)],
-            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
-            question_embedding=[0.42] * 1024,
-            embedded_question_text="다른 텍스트",  # mismatch
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="학사요람.pdf", page=10)],
+            cache_key_embedding=[0.42] * 1024,
         )
 
         await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
 
-        bedrock.embed_texts.assert_called_once_with(
-            ["원본 질문"], input_type="search_query"
-        )
+        cache: AnswerCache = postgres.upsert_answer_cache.call_args[0][0]
+        assert cache.question == "휴학 기간은?"
+        assert "[사용자]" not in cache.question
 
     async def test_save_includes_high_confidence(self):
         """search_results 최고 유사도가 HIGH 임계값(0.9) 이상이면 'high' 박제.
