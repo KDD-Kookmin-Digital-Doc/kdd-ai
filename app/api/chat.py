@@ -34,12 +34,23 @@ logger = logging.getLogger(__name__)
 # 오염 답변 캐시 WRITE 게이트 — LLM 환각 패턴 ("당신은 X학번 이전 학생" 등) 이
 # 답변 본문에 박힌 경우 캐시 저장을 거부. id=10 사고 후속 처방의 Layer 2
 # (Layer 1: 시스템 프롬프트 가드 / Layer 2: 본 정규식 게이트 / Layer 3: dedup
-# 키 cohort 분리). SSE 송출엔 영향 없고 캐시 저장만 skip — 다음 사용자가
-# 환각 답변에 cache hit 받는 경로 자체 차단.
+# 키 cohort 분리 / Layer 4: freeform 캐시 skip). SSE 송출엔 영향 없고 캐시
+# 저장만 skip — 다음 사용자가 환각 답변에 cache hit 받는 경로 자체 차단.
+#
+# 외부 리뷰 M2 — BE PR #96 후 user_context 에 admissionYear 부착되면 LLM 이
+# "본인은 2024학번이시므로 ..." 같은 명시 학번 인용 정상 답변 시도. 기존
+# bare 패턴 ("당신은\s*\d학번" / "본인은\s*\d학번") 은 이걸 환각으로 잘못
+# 분류해 차단 → L1 의 rule 2 완화 (정상 인용 허용) 와 정합 깨짐. 따라서
+# "X학번 + 이전/이후 + 단정 종결어미" 패턴만 유지 — id=10 사고는 그대로 차단
+# ("당신은 2025학번 이전 학생이므로"), 명시 학번 인용은 통과.
+#
+# false negative 잔여: 비교어 (이전/이후) 없는 직접 거짓 단정 ("당신은
+# 2030학번이시므로", user_context 에 2030학번 없는데 단정). L1 자발 준수 +
+# L3 cohort 키 격리 (다른 cohort 보호) + L4 freeform 게이트로 흡수. GA 전
+# context-grounded 검증 (user_context 학번 vs 답변 인용 학번 일치) 으로
+# 정밀화 검토.
 _POLLUTED_ANSWER_PATTERN = re.compile(
-    r"당신은\s*\d{2,4}학번"
-    r"|본인은\s*\d{2,4}학번"
-    r"|\d{2,4}학번\s*(?:이전|이후)\s*(?:이신|이며|학생이|이라|이므로|이라면|이시면)"
+    r"\d{2,4}학번\s*(?:이전|이후)\s*(?:이신|이며|학생이|이라|이므로|이라면|이시면)"
 )
 
 _pending_cache_writes: set[asyncio.Task] = set()
