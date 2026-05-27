@@ -16,6 +16,7 @@ from app.pipeline.semantic_cache import (
     CACHE_EMBED_INPUT_TYPE,
     _build_cache_key,
     _extract_question_from_cache_key,
+    _strip_freeform_from_user_context,
     check_cache,
     fetch_similar_questions_for_user,
 )
@@ -589,3 +590,65 @@ class TestCacheEmbedInputType:
 
         call = mock_bedrock.embed_texts.call_args
         assert call.kwargs["input_type"] == CACHE_EMBED_INPUT_TYPE
+
+
+# ── BE PR #96 후속 — user_context 자유 입력 (additionalInfo/jobDescription) sanitize ──
+
+
+class TestUserContextFreeformStripping:
+    """BE 가 user_context 에 부착하는 250자 자유 입력 (additionalInfo/jobDescription)
+    부분이 cache 키에 들어가지 않도록 sanitize. 같은 cohort 사용자가 자유 입력
+    차이만으로 cache miss 받지 않도록.
+    """
+
+    def test_strip_removes_additional_info(self):
+        """학생 추가 정보 구분자 이후 부분 제거."""
+        uc = "소프트웨어학부 2024학번 3학년 재학. 추가 정보: 부전공으로 통계학 신청 예정"
+        assert _strip_freeform_from_user_context(uc) == "소프트웨어학부 2024학번 3학년 재학"
+
+    def test_strip_removes_job_description(self):
+        """직원 담당 업무 구분자 이후 부분 제거."""
+        uc = "학사지원과 직원. 담당 업무: 졸업 사정 + 학적 변동 처리"
+        assert _strip_freeform_from_user_context(uc) == "학사지원과 직원"
+
+    def test_strip_passes_through_when_no_marker(self):
+        """구분자 없는 user_context 는 그대로 (cohort 만 박힌 케이스 / BE 폴백 호환)."""
+        uc = "소프트웨어학부 2024학번 3학년 재학"
+        assert _strip_freeform_from_user_context(uc) == uc
+
+    def test_strip_handles_empty(self):
+        """빈 user_context 는 빈 문자열 그대로."""
+        assert _strip_freeform_from_user_context("") == ""
+
+    def test_build_cache_key_excludes_additional_info(self):
+        """_build_cache_key 결과에 자유 입력 부분이 포함되지 않는다."""
+        uc = "소프트웨어학부 2024학번 3학년 재학. 추가 정보: 부전공 통계학"
+        key = _build_cache_key(uc, "휴학 신청 방법")
+
+        assert "추가 정보" not in key
+        assert "부전공 통계학" not in key
+        assert "소프트웨어학부 2024학번 3학년 재학" in key
+        assert "휴학 신청 방법" in key
+
+    def test_build_cache_key_same_cohort_different_freeform_yields_same_key(self):
+        """같은 cohort 사용자가 다른 자유 입력 가질 때 cache 키 동일 — cache hit 정합.
+
+        이 PR (BE #96 후속) 의 핵심 의도 잠금.
+        """
+        uc_a = "소프트웨어학부 2024학번 3학년 재학. 추가 정보: 부전공 통계학"
+        uc_b = "소프트웨어학부 2024학번 3학년 재학. 추가 정보: 복수전공 경영학"
+
+        key_a = _build_cache_key(uc_a, "휴학 신청 방법")
+        key_b = _build_cache_key(uc_b, "휴학 신청 방법")
+
+        assert key_a == key_b
+
+    def test_build_cache_key_different_cohort_yields_different_key(self):
+        """다른 cohort 는 자유 입력 유무와 무관하게 cache 키 분리 — 격리 유지."""
+        uc_a = "소프트웨어학부 2024학번 3학년 재학. 추가 정보: 부전공 통계학"
+        uc_b = "영문학부 2024학번 3학년 재학. 추가 정보: 부전공 통계학"
+
+        key_a = _build_cache_key(uc_a, "휴학 신청 방법")
+        key_b = _build_cache_key(uc_b, "휴학 신청 방법")
+
+        assert key_a != key_b

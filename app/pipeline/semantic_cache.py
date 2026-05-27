@@ -23,14 +23,38 @@ CACHE_EMBED_INPUT_TYPE = "search_query"
 _CACHE_KEY_USER_MARKER = "[사용자] "
 _CACHE_KEY_QUESTION_MARKER = "\n[질문] "
 
+# BE (kdd-api) UserContextBuilder 가 user_context 에 부착하는 자유 입력 구분자.
+# additionalInfo (학생) / jobDescription (직원) 250자 캡 필드가 이 구분자 이후에 붙는다.
+# 캐시 키에서는 이 구분자 이전까지만 prefix 로 사용해 cache 분리 입도를 cohort
+# 수준 (학과/학번/학년/학적) 으로 제한 — 같은 cohort 사용자가 자유 입력 차이만으로
+# cache miss 받지 않도록 정합.
+# 답변 생성 (LLM system prompt) 측은 원본 user_context 그대로 사용해 개인화
+# 정밀도 유지. BE 구분자 텍스트 변경 시 본 상수도 동기 갱신 필요.
+_USER_CONTEXT_FREEFORM_MARKERS = (". 추가 정보: ", ". 담당 업무: ")
+
+
+def _strip_freeform_from_user_context(user_context: str) -> str:
+    """user_context 에서 사용자 자유 입력 (additionalInfo/jobDescription) 부분 제거.
+
+    BE 가 부착하는 구분자 (``_USER_CONTEXT_FREEFORM_MARKERS``) 이전까지만 반환.
+    구분자가 없으면 user_context 그대로 (cohort 정보만 박힌 케이스 또는 BE 폴백
+    경로 호환).
+    """
+    earliest = len(user_context)
+    for marker in _USER_CONTEXT_FREEFORM_MARKERS:
+        idx = user_context.find(marker)
+        if idx != -1 and idx < earliest:
+            earliest = idx
+    return user_context[:earliest]
+
 
 def _build_cache_key(user_context: str, question: str) -> str:
     """캐시 키 텍스트를 빌드한다.
 
-    user_context 를 prefix 로 포함시켜 같은 user_context 사용자들끼리만 캐시를
-    공유하도록 분리한다. 다른 학과/학년/학적상태 사용자에게 환각 답변이
-    cross-누설되는 사고 (id=10 케이스) 를 임베딩 키 공간 분리 + dedup 키 분리로
-    구조적으로 차단.
+    user_context 의 cohort 부분 (학과/학번/학년/학적) 만 prefix 로 포함시켜 같은
+    cohort 사용자들끼리 캐시를 공유한다. 자유 입력 (additionalInfo / jobDescription)
+    은 ``_strip_freeform_from_user_context`` 가 제거 — 같은 cohort 사용자가
+    자유 입력 차이만으로 cache miss 받지 않도록.
 
     이 결과가 ``answer_cache.question`` 컬럼에 저장되어 RPC ``upsert_answer_cache``
     의 ``DELETE WHERE question = ...`` dedup 키 + ``pg_advisory_xact_lock`` 락 키로
@@ -41,7 +65,8 @@ def _build_cache_key(user_context: str, question: str) -> str:
     """
     if not user_context:
         return question
-    return f"{_CACHE_KEY_USER_MARKER}{user_context}{_CACHE_KEY_QUESTION_MARKER}{question}"
+    cohort_key = _strip_freeform_from_user_context(user_context)
+    return f"{_CACHE_KEY_USER_MARKER}{cohort_key}{_CACHE_KEY_QUESTION_MARKER}{question}"
 
 
 def _extract_question_from_cache_key(cache_key_text: str) -> str:
