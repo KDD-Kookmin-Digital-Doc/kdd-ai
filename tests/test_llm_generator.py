@@ -118,10 +118,10 @@ class TestUserContextInPrompt:
         assert user_context in system_prompt
 
     async def test_academic_prompt_contains_pii_inline_guard(self):
-        """이슈 #53 옵션 C: user_context 식별 정보를 답변 본문에 인용 금지 가드가 포함된다.
+        """이름·학과명 답변 본문 인용 금지 가드 회귀 (cross-cohort 답변 공유 시 노출 차단).
 
-        cross-user 시맨틱 캐시 누설 방어 — LLM이 학번·이름·학과를 답변 본문에
-        그대로 적지 않도록 system prompt에 가드 한 줄을 명시했는지 회귀 검증.
+        BE PR #96 후속 — admissionYear 가 user_context 에 들어온 후 학번 인용은
+        명시된 경우 허용 (rule 2 완화). 이름·학과명은 인용 금지 유지.
         """
         settings = _create_settings()
         ctx = _make_context(
@@ -131,40 +131,57 @@ class TestUserContextInPrompt:
 
         system_prompt, _ = build_academic_messages(ctx, settings)
 
-        # 가드 문구의 핵심 키워드가 모두 포함되는지
+        # 이름·학과명 인용 금지 키워드 유지
+        assert "이름·학과명" in system_prompt
         assert "답변 본문에 인용" in system_prompt
-        assert "학번" in system_prompt
+        # 학번 없을 때 권장 일반화 표현
         assert "본인의 학번에 해당하는 규정" in system_prompt
 
-    async def test_academic_prompt_blocks_user_specific_assertion(self):
-        """id=10 사고 후속: 2인칭/호칭 + 학번 단정 표현 금지 가드 회귀 잠금.
+    async def test_academic_prompt_blocks_inferred_admission_year_assertion(self):
+        """환각 추론 금지 가드 회귀 — user_context 에 없는 학번 단정 표현 차단 (id=10 사고).
 
-        "당신은 X학번 이전/이후", "본인은 X학번" 같은 단정 표현을 LLM 이 답변
-        본문에 끼워넣지 못하도록 system prompt 에 명시 금지 + 권장 예시 1쌍이
-        포함되는지 검증.
+        BE PR #96 후속 — "당신은 X학번 표현 자체 금지" 에서 "환각 추론 금지" 로
+        완화. 명시된 학번 인용은 허용 (별 테스트로 검증).
         """
         settings = _create_settings()
         ctx = _make_context(
-            user_context="소프트웨어학부 3학년 재학",
+            user_context="소프트웨어학부 3학년 재학",  # 학번 없음
             search_results=[_make_search_result()],
         )
 
         system_prompt, _ = build_academic_messages(ctx, settings)
 
-        assert "당신은 X학번" in system_prompt
-        assert "본인은 X학번" in system_prompt
-        assert "절대 쓰지 마세요" in system_prompt
-        # ❌/✅ few-shot 1쌍
-        assert "금지:" in system_prompt
-        assert "권장:" in system_prompt
+        # 환각 추론 금지 키워드 + id=10 사례 그대로 금지 예시
+        assert "단정·추론" in system_prompt
+        assert "환각 추론" in system_prompt
+        assert "당신은 2025학번 이전 학생이므로" in system_prompt
+        assert "절대 금지" in system_prompt
+
+    async def test_academic_prompt_allows_explicit_admission_year_citation(self):
+        """user_context 에 명시된 학번 인용 허용 가드 회귀 (BE PR #96 후속).
+
+        rule 2 완화 의도 잠금 — admissionYear 가 user_context 에 들어온 경우
+        LLM 이 "본인은 2024학번이시므로" 같은 정확한 학번 인용 답변 가능.
+        """
+        settings = _create_settings()
+        ctx = _make_context(
+            user_context="소프트웨어학부 2024학번 3학년 재학",
+            search_results=[_make_search_result()],
+        )
+
+        system_prompt, _ = build_academic_messages(ctx, settings)
+
+        # 명시된 학번 인용 허용 키워드
+        assert "명시된 학번만" in system_prompt
+        # 허용 예시 (BE PR #96 후 정상 개인화 답변)
+        assert "본인은 2024학번이시므로" in system_prompt
 
     async def test_academic_prompt_blocks_inference_of_missing_attributes(self):
-        """id=10 사고 핵심 원인 처방: user_context 에 없는 속성 추론·단정 금지.
+        """user_context 에 없는 속성 추론·단정 금지 가드 회귀 (id=10 핵심 원인 처방).
 
-        BE 가 user_context 에 학번을 안 보내는데 LLM 이 학년 정보로 학번을
-        환각 추론하는 케이스를 system prompt 가드로 자발 준수 억제 — 가드
-        키워드 회귀 잠금. BE 측 admissionYear 포함 PR 머지 시 본 가드 발동
-        빈도가 감소해야 함 (별도 운영 모니터링).
+        BE 가 user_context 에 학번을 안 보내는 케이스 + 직책/입학년도 등 미명시
+        속성 환각 추론 일반 차단. BE PR #96 (admissionYear 부착) 머지 후엔
+        학번 추론 케이스 자연 감소 예상.
         """
         settings = _create_settings()
         ctx = _make_context(
