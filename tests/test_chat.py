@@ -571,6 +571,170 @@ class TestAnswerCacheCompleteness:
         assert "캐시 저장 skip — 오염 답변 패턴 감지" in caplog.text
         postgres.upsert_answer_cache.assert_not_called()
 
+    # ── Layer 4 — freeform 캐시 skip (BE PR #96 후속, 외부 리뷰 M1) ──
+
+    async def test_save_skips_cache_when_user_context_has_additional_info(self):
+        """학생 자유 입력 (additionalInfo) 부착 시 캐시 저장 skip — cohort 누설 차단."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="휴학 신청 방법은?",
+            user_context="소프트웨어학부 2024학번 3학년 재학. 추가 정보: 부전공 통계학 신청 예정",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
+
+        postgres.upsert_answer_cache.assert_not_called()
+
+    async def test_save_skips_cache_when_user_context_has_job_description(self):
+        """직원 자유 입력 (jobDescription) 부착 시 캐시 저장 skip."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="직원 휴가 신청 절차는?",
+            user_context="학사지원과 직원. 담당 업무: 졸업 사정 + 학적 변동 처리",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
+
+        postgres.upsert_answer_cache.assert_not_called()
+
+    async def test_save_logs_info_on_freeform_skip(self, caplog):
+        """Layer 4 발동 시 INFO 로그 박힘 (CloudWatch 모니터링 — freeform 사용자 비율 추적)."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="질문",
+            user_context="컴공 3학년 재학. 추가 정보: 부전공 통계학",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+
+        with caplog.at_level(logging.INFO):
+            await _save_answer_cache(
+                context, ["답변"], bedrock, postgres, _create_settings()
+            )
+
+        assert "캐시 저장 skip — 자유 입력 개인화 답변" in caplog.text
+        postgres.upsert_answer_cache.assert_not_called()
+
+    async def test_save_accepts_when_no_freeform_in_user_context(self):
+        """cohort-only user_context (freeform 없음) → 정상 캐시 저장 (기존 행동 보존)."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="휴학 신청 방법은?",
+            user_context="소프트웨어학부 2024학번 3학년 재학",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+
+        await _save_answer_cache(context, ["답변"], bedrock, postgres, _create_settings())
+
+        postgres.upsert_answer_cache.assert_called_once()
+
+    # ── Layer 2 정규식 정정 (M2 처방, 외부 리뷰) ──
+    # L1 의 rule 2 완화 (명시 학번 인용 허용) 와 L2 정합 — bare 패턴 2개 제거
+    # 후 명시 인용 통과, 환각 추론 (이전/이후 + 단정 종결어미) 차단 유지.
+
+    async def test_save_accepts_explicit_admission_year_citation(self):
+        """L1 허용 예시 ("본인은 2024학번이시므로") 답변이 L2 통과해 정상 캐시 저장.
+
+        BE PR #96 후 명시 학번 인용 정상 개인화 답변의 캐시 경로 보장 (M2 처방).
+        """
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="K*코딩역량 적용 대상인가요?",
+            user_context="소프트웨어학부 2024학번 3학년 재학",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+        # L1 의 허용 예시 그대로 답변에 박힌 케이스
+        explicit_citation = [
+            "본인은 2024학번이시므로 K*코딩역량인증 면제 대상입니다.",
+        ]
+
+        await _save_answer_cache(
+            context, explicit_citation, bedrock, postgres, _create_settings()
+        )
+
+        postgres.upsert_answer_cache.assert_called_once()
+
+    async def test_save_rejects_id10_with_before_after_assertion(self):
+        """id=10 사고 패턴 ("X학번 이전/이후 + 단정 종결어미") 은 변경 후에도 차단 유지."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="K*코딩역량 면제 가능한가요?",
+            user_context="컴공 3학년 재학",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+        polluted = [
+            "당신은 2025학번 이전 학생이므로 K*코딩역량 면제됩니다.",
+        ]
+
+        await _save_answer_cache(context, polluted, bedrock, postgres, _create_settings())
+
+        postgres.upsert_answer_cache.assert_not_called()
+
+    async def test_save_accepts_bonin_citation_without_before_after(self):
+        """비교어 없는 명시 인용 ("본인은 24학번 학생이라") 도 통과 (M2 정합)."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="졸업 요건은?",
+            user_context="컴공 2024학번 3학년 재학",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+        citation = [
+            "본인은 24학번 학생이라 적용 규정은 다음과 같습니다.",
+        ]
+
+        await _save_answer_cache(context, citation, bedrock, postgres, _create_settings())
+
+        postgres.upsert_answer_cache.assert_called_once()
+
+    async def test_save_rejects_other_before_after_patterns(self):
+        """일반화된 "X학번 이후 + 단정 종결어미" 도 차단 유지 (3rd 패턴)."""
+        bedrock = _create_bedrock()
+        postgres = _create_postgres()
+        context = PipelineContext(
+            original_question="질문",
+            user_context="컴공 3학년 재학",
+            intent="academic",
+            search_results=[_make_search_result()],
+            source_docs=[SourceDoc(doc_id=1, chunk_id=1, doc_name="a.pdf", page=1)],
+            cache_key_embedding=[0.42] * 1024,
+        )
+        polluted = [
+            "2024학번 이후이며 적용되지 않는 규정이 있습니다.",
+        ]
+
+        await _save_answer_cache(context, polluted, bedrock, postgres, _create_settings())
+
+        postgres.upsert_answer_cache.assert_not_called()
+
     async def test_save_includes_high_confidence(self):
         """search_results 최고 유사도가 HIGH 임계값(0.9) 이상이면 'high' 박제.
 
