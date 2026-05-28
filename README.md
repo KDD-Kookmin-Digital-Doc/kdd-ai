@@ -139,7 +139,7 @@ app/
 │   └── dependencies.py      # 의존성 주입 (클라이언트 싱글턴)
 │
 ├── pipeline/                # RAG 파이프라인 모듈
-│   ├── semantic_cache.py    # 시맨틱 캐싱 (answer_cache 기반)
+│   ├── semantic_cache.py    # 시맨틱 캐싱 (cohort 별 키 격리 + 자유 입력 sanitize, PR #72/#73)
 │   ├── query_rewriter.py    # 질문 재작성 (히스토리 컨텍스트)
 │   ├── intent_router.py     # 의도 분류 (academic / chitchat)
 │   ├── vector_search.py     # 벡터 검색 + Cohere Rerank + 임계값 폴백
@@ -218,23 +218,25 @@ cp .env.example .env
 
 ### RAG 동작 파라미터
 
-| 변수 | 기본값 | 설명 |
-|---|---|---|
-| `SIMILARITY_THRESHOLD` | `0.75` | 벡터 검색 유사도 임계값 (운영 `.env` 와 다를 수 있음 — 이슈 #45) |
-| `CACHE_SIMILARITY_THRESHOLD` | `0.95` | 시맨틱 캐시 유사도 임계값 |
-| `FALLBACK_SIMILARITY_THRESHOLD` | `0.5` | 폴백(유사 질문 추천) floor 임계값 |
-| `CONFIDENCE_HIGH_THRESHOLD` | `0.9` | confidence "high" 기준 |
-| `CONFIDENCE_MEDIUM_THRESHOLD` | `0.8` | confidence "medium" 기준 |
-| `VECTOR_SEARCH_TOP_K` | `5` | Rerank 미사용 시 또는 fallback 시 검색 결과 수 |
-| `FALLBACK_SUGGESTED_COUNT` | `3` | 폴백 시 추천 질문 개수 |
-| `INTENT_HISTORY_TURNS` | `6` | 의도 분류에 첨부할 history 메시지 개수 |
-| `INTENT_HISTORY_CHARS_PER_TURN` | `200` | history 메시지 1개당 최대 글자 수 |
-| `REWRITE_MAX_TOKENS` | `512` | 질문 재작성 LLM 최대 출력 토큰 |
-| `INTENT_MAX_TOKENS` | `16` | 의도 분류 LLM 최대 출력 토큰 |
-| `CHITCHAT_MAX_TOKENS` | `256` | 잡담 LLM 최대 출력 토큰 |
-| `FAQ_LLM_MAX_TOKENS` | `512` | FAQ 답변 초안 LLM 최대 출력 토큰 |
-| `LLM_CONTEXT_WINDOW` | `200000` | LLM 컨텍스트 윈도우 (토큰) |
-| `LLM_MAX_TOKENS` | `1024` | 답변 LLM 최대 출력 토큰 |
+| 변수 | 기본값 | 운영 적용값 | 설명 |
+|---|---|---|---|
+| `SIMILARITY_THRESHOLD` | `0.75` | **`0.3`** | 벡터 검색 유사도 임계값 (운영 트래픽 기반 튜닝) |
+| `CACHE_SIMILARITY_THRESHOLD` | `0.95` | **`0.9`** | 시맨틱 캐시 유사도 임계값 (paraphrase 수준 엄격) |
+| `FALLBACK_SIMILARITY_THRESHOLD` | `0.5` | **`0.3`** | 폴백(유사 질문 추천) floor 임계값. PR #72/#73 cohort 별 좁아진 캐시 풀 흡수용 하향 |
+| `CONFIDENCE_HIGH_THRESHOLD` | `0.9` | **`0.5`** | confidence "high" 기준 (실측 max_score 0.48~0.50 분포 기반 튜닝) |
+| `CONFIDENCE_MEDIUM_THRESHOLD` | `0.8` | **`0.4`** | confidence "medium" 기준 |
+| `VECTOR_SEARCH_TOP_K` | `5` | (default) | Rerank 미사용 시 또는 fallback 시 검색 결과 수 |
+| `FALLBACK_SUGGESTED_COUNT` | `3` | (default) | 폴백 시 추천 질문 개수 |
+| `INTENT_HISTORY_TURNS` | `6` | (default) | 의도 분류에 첨부할 history 메시지 개수 |
+| `INTENT_HISTORY_CHARS_PER_TURN` | `200` | (default) | history 메시지 1개당 최대 글자 수 |
+| `REWRITE_MAX_TOKENS` | `512` | (default) | 질문 재작성 LLM 최대 출력 토큰 |
+| `INTENT_MAX_TOKENS` | `16` | (default) | 의도 분류 LLM 최대 출력 토큰 |
+| `CHITCHAT_MAX_TOKENS` | `256` | (default) | 잡담 LLM 최대 출력 토큰 |
+| `FAQ_LLM_MAX_TOKENS` | `512` | (default) | FAQ 답변 초안 LLM 최대 출력 토큰 |
+| `LLM_CONTEXT_WINDOW` | `200000` | (default) | LLM 컨텍스트 윈도우 (토큰) |
+| `LLM_MAX_TOKENS` | `1024` | (default) | 답변 LLM 최대 출력 토큰 |
+
+> 운영 적용값이 `default` 와 다른 변수는 운영 트래픽 기반 튜닝 결과 — `.env.example` 의 default 는 신규 개발자용 합리적 시작값을 유지. 신규 배포 시 운영-튜닝값으로 `.env` 명시 필요.
 
 ### 동시성 · 캐시 · 타임아웃
 
@@ -314,9 +316,15 @@ pytest tests/ -v --cov=app
 ## 설계 원칙
 
 - **무상태성**: 세션 상태를 서버에 저장하지 않으며, 매 요청마다 `history` 배열로 대화 문맥을 전달받음
-- **비용 최적화**: 시맨틱 캐싱을 파이프라인 최선두에 배치하여 LLM 호출 최소화 + 동일 요청 내 임베딩 중복 호출 제거(`PipelineContext.question_embedding` 보관)
-- **할루시네이션 방지**: 검색된 문서 컨텍스트 내에서만 답변하도록 LLM 프롬프트 제한, 답변 본문 각 주장 끝에 `{{N}}` 인용 마커 강제로 출처 가시성 확보
+- **비용 최적화**: 시맨틱 캐싱을 파이프라인 최선두에 배치하여 LLM 호출 최소화 + 동일 요청 내 임베딩 중복 호출 제거 (`PipelineContext.question_embedding` 검색용 / `cache_key_embedding` 캐시용 분리 보관, batch 호출로 임베딩 API round-trip 1회)
+- **할루시네이션 방지 — 4-layer 다층 방어** (PR #72/#73):
+  - **L1**: LLM 시스템 프롬프트 가드 — user_context 에 명시되지 않은 속성 추론·단정 금지, 명시된 학번만 인용 허용 (자발 준수)
+  - **L2**: 캐시 WRITE 정규식 게이트 — `"X학번 + 이전/이후 + 단정 종결어미"` 패턴 검출 시 캐시 저장 거부 (오염 답변이 다음 사용자에게 hit 되는 경로 차단)
+  - **L3**: dedup 키 cohort 분리 — `answer_cache.question` 컬럼에 `_build_cache_key(user_context, question)` 결과 저장해 RPC `pg_advisory_xact_lock` + `DELETE WHERE question` 키가 cohort 별로 갈라짐 (DDL 변경 0, 옵션 E)
+  - **L4**: freeform 캐시 skip — user_context 에 자유 입력 (학생 `additionalInfo` / 직원 `jobDescription`) 부착 시 답변 캐시 저장 거부 (cohort 공유 캐시로 개인 입력 누설 차단)
+  - 답변 본문 각 주장 끝에 `{{N}}` 인용 마커 강제로 출처 가시성 확보
+- **사용자 단위 캐시 격리**: `answer_cache` 키를 user_context cohort 부분 (학과·학번·학년·학적) 으로 분리해 cohort 간 cross-누설 차단. 자유 입력은 LLM 답변 생성에만 사용하고 캐시 키엔 제외 + 부착 사용자 답변은 캐시 저장 skip (PII 누설 차단). 검색용 임베딩과 캐시용 임베딩은 서로 다른 키 공간을 유지 (`fetch_similar_questions_for_user` 가 fallback 추천에 prefix 제거 + 동일 질문 cohort 중복 제거)
 - **두 단계 retrieval**: 1024차원 cosine 임베딩 후보 30건 → Cohere Rerank 3.5 로 5건 재정렬. Rerank 실패/타임아웃 시 임베딩 결과로 graceful degradation
 - **모델 교체 용이성**: LLM/임베딩/Rerank 모델 ID를 환경 변수로 관리하여 코드 변경 없이 교체 가능
 - **방어적 설계**: 컨텍스트 윈도우 기반 동적 history truncation, 타임아웃, 리트라이, `asyncio.Lock` 기반 lazy pool 초기화 race 가드
-- **관측성**: `session_id` ContextVar 자동 트레이싱으로 모든 로그에 세션 식별자 첨부, CloudWatch Logs Insights 에서 단일 세션 흐름 추적 가능
+- **관측성**: `session_id` ContextVar 자동 트레이싱으로 모든 로그에 세션 식별자 첨부, CloudWatch Logs Insights 에서 단일 세션 흐름 추적 가능. 4-layer 게이트 발동은 `"캐시 저장 skip — 오염 답변"` (L2) / `"캐시 저장 skip — 자유 입력"` (L4) 로그로 모니터링 가능
